@@ -1,6 +1,7 @@
 from PyPDF2 import PdfFileReader, PdfFileWriter, pdf
 import easygui
 
+
 def calc_sig_sizes(number_of_pages, number_of_sigs):
     if number_of_pages % 4 != 0:
         return False
@@ -89,8 +90,8 @@ def book_format(input_pdf, sig_sizes):
         running_total = end + 1
         page_ranges.append((start, end))
     output_pages = []
-    for pr in page_ranges:
-        print("Sig: {}".format(pr))
+    for i, pr in enumerate(page_ranges):
+        print("Formatting sig. {}: pages {} to {}...".format(i + 1, pr[0], pr[1]))
         for p in booklet_format(input_pdf, pr):
             output_pages.append(p)
     return output_pages
@@ -98,11 +99,13 @@ def book_format(input_pdf, sig_sizes):
 
 def main():
     # Get file
+    print("Select Source File...")
     file_name = easygui.fileopenbox("Select File", "", "*.pdf", ["\*.pdf", "*.*"])
     if file_name is None:
         return None
     else:
         pass
+    print(file_name)
     # Get number of sigs
     input_fh = open(file_name, "rb")
     reader = PdfFileReader(input_fh, strict=False)
@@ -175,13 +178,21 @@ def main():
         sig_sizes[i] = int(s) * 4
 
     # Get output dir
+    print("\nSelect Output File...")
     output_file_name = easygui.filesavebox("Select Save Location", "", "ouput.pdf", "*.pdf")
+    if output_file_name is None:
+        return None
+    else:
+        pass
+    print(output_file_name)
 
     # Run pdf merging
+    print("\nOrdering pages:")
     output_pages = book_format(reader, sig_sizes)
 
     # Put output pages into an output stream
     outputStream = PdfFileWriter()
+    print("\nSaving...")
     for op in output_pages:
         outputStream.addPage(op)
     output_fh = open(output_file_name, "bw")
@@ -190,7 +201,7 @@ def main():
     output_fh.close()
     # Close the input stream
     input_fh.close()
-
+    easygui.msgbox("Done!")
 
 
 if __name__ == '__main__':

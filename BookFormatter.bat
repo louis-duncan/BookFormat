@@ -1,5 +1,5 @@
 echo off
 title Louis' Book Formatter
-color F9
+color F1
 cls
 venv\Scripts\python.exe main.py
