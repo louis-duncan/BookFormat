@@ -183,7 +183,10 @@ def main():
     if output_file_name is None:
         return None
     else:
-        pass
+        if output_file_name.upper().endswith(".PDF"):
+            pass
+        else:
+            output_file_name = output_file_name + ".pdf"
     print(output_file_name)
 
     # Run pdf merging
