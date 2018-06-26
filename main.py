@@ -97,6 +97,67 @@ def book_format(input_pdf, sig_sizes):
     return output_pages
 
 
+def multi_page_format():
+    file_name = easygui.fileopenbox("Select PDF to format:","","*.pdf", ["*.pdf", "*.*"])
+    if file_name is None:
+        return None
+    else:
+        pass
+    input_fh = open(file_name, "rb")
+    reader = PdfFileReader(input_fh, strict=False)
+    number_of_pages = reader.getNumPages()
+    if number_of_pages % 2 == 0:
+        pass
+    else:
+        easygui.msgbox("The document should have an even number of pages.\n"
+                       "This document has {} pages, and so a blank page will be added at the end.")
+    output_file_name = easygui.filesavebox("Select save location:", "", "multi-page.pdf", "*.pdf")
+    if output_file_name is None:
+        return None
+    else:
+        pass
+    doc_width = reader.getPage(0).mediaBox[2]
+    doc_height = reader.getPage(0).mediaBox[3]
+    output_pages = []
+    for p in range(0, number_of_pages, 4):
+        print("{}, {}, {}, {}".format(p, p + 1, p + 2, p + 3))
+        new_front_page = pdf.PageObject(pdf=reader)
+        new_front_page = new_front_page.createBlankPage(reader, doc_width, 2 * doc_height)
+        try:
+            new_front_page.mergeTranslatedPage(reader.getPage(p), 0.0, 0.0, True)
+        except ValueError:
+            pass
+        try:
+            new_front_page.mergeTranslatedPage(reader.getPage(p + 2), 0.0, doc_height, True)
+        except ValueError:
+            pass
+        new_back_page = pdf.PageObject(pdf=reader)
+        new_back_page = new_back_page.createBlankPage(reader, doc_width, 2 * doc_height)
+        try:
+            new_back_page.mergeTranslatedPage(reader.getPage(p + 1), 0.0, 0.0, True)
+        except ValueError:
+            pass
+        try:
+            new_back_page.mergeTranslatedPage(reader.getPage(p + 3), 0.0, doc_height, True)
+        except ValueError:
+            pass
+        output_pages.append(new_front_page)
+        output_pages.append(new_back_page)
+
+    # Put output pages into an output stream
+    output_stream = PdfFileWriter()
+    print("\nSaving...")
+    for op in output_pages:
+        output_stream.addPage(op)
+    output_fh = open(output_file_name, "bw")
+    output_stream.write(output_fh)
+    # Close the output stream
+    output_fh.close()
+    # Close the input stream
+    input_fh.close()
+    easygui.msgbox("Done!")
+
+
 def main():
     # Get file
     print("Select Source File...")
@@ -194,12 +255,12 @@ def main():
     output_pages = book_format(reader, sig_sizes)
 
     # Put output pages into an output stream
-    outputStream = PdfFileWriter()
+    output_stream = PdfFileWriter()
     print("\nSaving...")
     for op in output_pages:
-        outputStream.addPage(op)
+        output_stream.addPage(op)
     output_fh = open(output_file_name, "bw")
-    outputStream.write(output_fh)
+    output_stream.write(output_fh)
     # Close the output stream
     output_fh.close()
     # Close the input stream
@@ -208,4 +269,11 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    choices = ["Book Format", "Multi-page Format", "Close"]
+    choice = easygui.buttonbox("", "", choices)
+    if choice == choices[0]:
+        main()
+    elif choice == choices[1]:
+        multi_page_format()
+    else:
+        pass
