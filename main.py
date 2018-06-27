@@ -103,6 +103,7 @@ def multi_page_format():
         return None
     else:
         pass
+
     input_fh = open(file_name, "rb")
     reader = PdfFileReader(input_fh, strict=False)
     number_of_pages = reader.getNumPages()
@@ -116,30 +117,52 @@ def multi_page_format():
         return None
     else:
         pass
-    doc_width = reader.getPage(0).mediaBox[2]
-    doc_height = reader.getPage(0).mediaBox[3]
+
+    new_page_height = 297  # In mm !
+    new_page_width = 210  # In mm !
+    final_page_height = 125   # In mm !
+
+    # Convert mm to inches, then to the PDF space
+    new_page_height = float((new_page_height * 0.03937007874) / (1 / 72))
+    new_page_width = float((new_page_width * 0.03937007874) / (1 / 72))
+    final_page_height = float((final_page_height * 0.03937007874) / (1 / 72))
+
+    doc_width = float(reader.getPage(0).mediaBox[2])
+    doc_height = float(reader.getPage(0).mediaBox[3])
+    effective_scale = float(final_page_height / doc_height)
+    scaled_width = float(effective_scale * doc_width)
+
+    print("Scale: {}%\n"
+          "Original doc width: {}, scaled to {}\n"
+          "Original doc height: {}, scaled to {}".format(round(effective_scale * 100, 2), doc_width, scaled_width,
+                                                         doc_height, round(doc_height * effective_scale)))
+
+    d_x = (new_page_width - scaled_width) / 2
+    top_d_y = ((new_page_height / 2) - final_page_height) / 2
+    bottom_d_y = top_d_y + (new_page_height / 2)
+
     output_pages = []
     for p in range(0, number_of_pages, 4):
         print("{}, {}, {}, {}".format(p, p + 1, p + 2, p + 3))
         new_front_page = pdf.PageObject(pdf=reader)
-        new_front_page = new_front_page.createBlankPage(reader, doc_width, 2 * doc_height)
+        new_front_page = new_front_page.createBlankPage(reader, new_page_width, new_page_height)
         try:
-            new_front_page.mergeTranslatedPage(reader.getPage(p), 0.0, 0.0, True)
-        except ValueError:
+            new_front_page.mergeScaledTranslatedPage(reader.getPage(p), effective_scale, d_x, top_d_y, True)
+        except IndexError:
             pass
         try:
-            new_front_page.mergeTranslatedPage(reader.getPage(p + 2), 0.0, doc_height, True)
-        except ValueError:
+            new_front_page.mergeScaledTranslatedPage(reader.getPage(p + 2), effective_scale, d_x, bottom_d_y, True)
+        except IndexError:
             pass
         new_back_page = pdf.PageObject(pdf=reader)
-        new_back_page = new_back_page.createBlankPage(reader, doc_width, 2 * doc_height)
+        new_back_page = new_back_page.createBlankPage(reader, new_page_width, new_page_height)
         try:
-            new_back_page.mergeTranslatedPage(reader.getPage(p + 1), 0.0, 0.0, True)
-        except ValueError:
+            new_back_page.mergeScaledTranslatedPage(reader.getPage(p + 1), effective_scale, d_x, top_d_y, True)
+        except IndexError:
             pass
         try:
-            new_back_page.mergeTranslatedPage(reader.getPage(p + 3), 0.0, doc_height, True)
-        except ValueError:
+            new_back_page.mergeScaledTranslatedPage(reader.getPage(p + 3), effective_scale, d_x, bottom_d_y, True)
+        except IndexError:
             pass
         output_pages.append(new_front_page)
         output_pages.append(new_back_page)
