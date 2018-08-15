@@ -181,6 +181,76 @@ def multi_page_format():
     easygui.msgbox("Done!")
 
 
+def double_up_format():
+    file_name = easygui.fileopenbox("Select PDF to format:","","*.pdf", ["*.pdf", "*.*"])
+    if file_name is None:
+        return None
+    else:
+        pass
+
+    input_fh = open(file_name, "rb")
+    reader = PdfFileReader(input_fh, strict=False)
+    number_of_pages = reader.getNumPages()
+    if number_of_pages % 2 == 0:
+        pass
+    else:
+        easygui.msgbox("The document should have an even number of pages.\n"
+                       "This document has {} pages, and so a blank page will be added at the end.")
+    output_file_name = easygui.filesavebox("Select save location:", "", "double-up.pdf", "*.pdf")
+    if output_file_name is None:
+        return None
+    else:
+        pass
+
+    # Give sizes for new pages, they will ba A4.
+    new_page_height = 297  # In mm !
+    new_page_width = 210  # In mm !
+    # This is the height we want our input pages to be scaled to.
+    final_page_height = 124   # In mm !
+
+    # Convert mm to inches, then to the PDF space
+    new_page_height = float((new_page_height * 0.03937007874) / (1 / 72))
+    new_page_width = float((new_page_width * 0.03937007874) / (1 / 72))
+    final_page_height = float((final_page_height * 0.03937007874) / (1 / 72))
+
+    doc_width = float(reader.getPage(0).mediaBox[2])
+    doc_height = float(reader.getPage(0).mediaBox[3])
+    effective_scale = float(final_page_height / doc_height)
+    scaled_width = float(effective_scale * doc_width)
+
+    print("Scale: {}%\n"
+          "Original doc width: {}, scaled to {}\n"
+          "Original doc height: {}, scaled to {}".format(round(effective_scale * 100, 2), doc_width, scaled_width,
+                                                         doc_height, round(doc_height * effective_scale)))
+
+    d_x = (new_page_width - scaled_width) / 2
+    top_d_y = ((new_page_height / 2) - final_page_height) / 2
+    bottom_d_y = top_d_y + (new_page_height / 2)
+
+    output_pages = []
+    for p in range(0, number_of_pages):
+        print("> {}".format(p))
+        new_page = pdf.PageObject(pdf=reader)
+        new_page = new_page.createBlankPage(reader, new_page_width, new_page_height)
+        new_page.mergeScaledTranslatedPage(reader.getPage(p), effective_scale, d_x, top_d_y, True)
+        new_page.mergeScaledTranslatedPage(reader.getPage(p), effective_scale, d_x, bottom_d_y, True)
+
+        output_pages.append(new_page)
+
+    # Put output pages into an output stream
+    output_stream = PdfFileWriter()
+    print("\nSaving...")
+    for op in output_pages:
+        output_stream.addPage(op)
+    output_fh = open(output_file_name, "bw")
+    output_stream.write(output_fh)
+    # Close the output stream
+    output_fh.close()
+    # Close the input stream
+    input_fh.close()
+    easygui.msgbox("Done!")
+
+
 def main():
     # Get file
     print("Select Source File...")
@@ -291,12 +361,38 @@ def main():
     easygui.msgbox("Done!")
 
 
+def alt_flip():
+    input_fh = open(easygui.fileopenbox(), "rb")
+    reader = PdfFileReader(input_fh, strict=False)
+    doc_width = float(reader.getPage(0).mediaBox[2])
+    doc_height = float(reader.getPage(0).mediaBox[3])
+
+    output_pages = []
+
+    for p in range(reader.getNumPages()):
+        current_page: pdf.PageObject = reader.getPage(p)
+        if bool(p % 2):
+            current_page.rotateClockwise(180)
+        else:
+            pass
+        output_pages.append(current_page)
+
+    output_stream = PdfFileWriter()
+    for op in output_pages:
+        output_stream.addPage(op)
+
+    output_fh = open(easygui.filesavebox(), "bw")
+    output_stream.write(output_fh)
+
+
 if __name__ == '__main__':
-    choices = ["Book Format", "Multi-page Format", "Close"]
+    choices = ["Book Format", "Multi-page Format", "Double-up Format", "Close"]
     choice = easygui.buttonbox("", "", choices)
     if choice == choices[0]:
         main()
     elif choice == choices[1]:
         multi_page_format()
+    elif choice == choices[2]:
+        double_up_format()
     else:
         pass
