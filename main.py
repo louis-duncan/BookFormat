@@ -1,5 +1,8 @@
+import os
+
 from PyPDF2 import PdfFileReader, PdfFileWriter, pdf
 import easygui
+import sys
 
 
 def calc_sig_sizes(number_of_pages, number_of_sigs):
@@ -181,26 +184,32 @@ def multi_page_format():
     easygui.msgbox("Done!")
 
 
-def double_up_format():
-    file_name = easygui.fileopenbox("Select PDF to format:","","*.pdf", ["*.pdf", "*.*"])
+def double_up_format(file_name=None):
+    params_given = file_name is not None
     if file_name is None:
-        return None
-    else:
-        pass
+        file_name = easygui.fileopenbox("Select PDF to format:","","*.pdf", ["*.pdf", "*.*"])
+        if file_name is None:
+            return None
+        else:
+            pass
 
     input_fh = open(file_name, "rb")
     reader = PdfFileReader(input_fh, strict=False)
     number_of_pages = reader.getNumPages()
-    if number_of_pages % 2 == 0:
+    if (number_of_pages % 2 == 0) or params_given:
         pass
     else:
         easygui.msgbox("The document should have an even number of pages.\n"
                        "This document has {} pages, and so a blank page will be added at the end.")
-    output_file_name = easygui.filesavebox("Select save location:", "", "double-up.pdf", "*.pdf")
-    if output_file_name is None:
-        return None
+
+    if params_given:
+        output_file_name = os.path.join(os.path.dirname(file_name), "output_double_up.pdf")
     else:
-        pass
+        output_file_name = easygui.filesavebox("Select save location:", "", "double-up.pdf", "*.pdf")
+        if output_file_name is None:
+            return None
+        else:
+            pass
 
     # Give sizes for new pages, they will ba A4.
     new_page_height = 297  # In mm !
@@ -248,18 +257,22 @@ def double_up_format():
     output_fh.close()
     # Close the input stream
     input_fh.close()
-    easygui.msgbox("Done!")
+    if not params_given:
+        easygui.msgbox("Done!")
 
 
-def main():
-    # Get file
-    print("Select Source File...")
-    file_name = easygui.fileopenbox("Select File", "", "*.pdf", ["\*.pdf", "*.*"])
+def main(file_name=None, number_of_sigs=None):
+    params_given = (file_name is not None) or (number_of_sigs is not None)
+    if file_name is None:
+        # Get file
+        print("Select Source File...")
+        file_name = easygui.fileopenbox("Select File", "", "*.pdf", ["\\*.pdf", "*.*"])
     if file_name is None:
         return None
     else:
         pass
     print(file_name)
+
     # Get number of sigs
     input_fh = open(file_name, "rb")
     reader = PdfFileReader(input_fh, strict=False)
@@ -270,78 +283,85 @@ def main():
         easygui.msgbox("The document must have a number of pages divisible by 4.\n"
                        "The selected document has {} pages.".format(number_of_pages))
         return None
-    number_of_sigs = None
-    msg = "Enter Desired Number of Signatures:"
-    warning = "Input must be a whole number!"
-    while not can_be_int(number_of_sigs):
-        number_of_sigs = easygui.enterbox(msg, "")
-        if number_of_sigs is None:
-            return None
-        else:
-            pass
-        if msg.endswith(warning):
-            pass
-        else:
-            msg += "\n" + warning
-    number_of_sigs = int(number_of_sigs)
+
+    if number_of_sigs is None:
+        msg = "Enter Desired Number of Signatures:"
+        warning = "Input must be a whole number!"
+        while not can_be_int(number_of_sigs):
+            number_of_sigs = easygui.enterbox(msg, "")
+            if number_of_sigs is None:
+                return None
+            else:
+                pass
+            if msg.endswith(warning):
+                pass
+            else:
+                msg += "\n" + warning
+        number_of_sigs = int(number_of_sigs)
+
     sig_sizes = calc_sig_sizes(number_of_pages, number_of_sigs=number_of_sigs)
     labels = []
     working_sig_sizes = []
+
     for i, s in enumerate(sig_sizes):
         labels.append("Sig. " + str(i + 1))
         working_sig_sizes.append(str(int(s / 4)))
-    # Show sig sizing
-    happy = False
-    sig_base_msg = "These are the recommended signature sizes (number of sheets).\n" \
-                   "Adjust if desired. Click OK to commence formatting:\n" \
-                   "(Total number must equal {})".format(int(sum(sig_sizes) / 4))
-    msg = sig_base_msg
-    while not happy:
-        working_sig_sizes = easygui.multenterbox(msg,
-                                                 "",
-                                                 labels,
-                                                 working_sig_sizes,
-                                                 )
-        if working_sig_sizes is None:
+
+    if not params_given:
+        # Show sig sizing
+        happy = False
+        sig_base_msg = "These are the recommended signature sizes (number of sheets).\n" \
+                       "Adjust if desired. Click OK to commence formatting:\n" \
+                       "(Total number must equal {})".format(int(sum(sig_sizes) / 4))
+        msg = sig_base_msg
+        while not happy:
+            working_sig_sizes = easygui.multenterbox(msg,
+                                                     "",
+                                                     labels,
+                                                     working_sig_sizes,
+                                                     )
+            if working_sig_sizes is None:
+                return None
+            else:
+                pass
+
+            count = 0
+            value_error = False
+            for w in working_sig_sizes:
+                try:
+                    count += int(w)
+                except ValueError:
+                    value_error = True
+            total_error = False
+            if count != int(sum(sig_sizes) / 4):
+                total_error = True
+            else:
+                pass
+            msg = sig_base_msg
+            if value_error:
+                msg += "\n\nInputs must be whole numbers!"
+            if total_error:
+                msg += "\n\nInputs do not total {}!".format(int(sum(sig_sizes) / 4))
+            if True in (value_error, total_error):
+                happy = False
+            else:
+                happy = True
+        for i, s in enumerate(working_sig_sizes):
+            sig_sizes[i] = int(s) * 4
+
+        # Get output dir
+        print("\nSelect Output File...")
+        output_file_name = easygui.filesavebox("Select Save Location", "", "output.pdf", "*.pdf")
+        if output_file_name is None:
             return None
         else:
-            pass
-
-        count = 0
-        value_error = False
-        for w in working_sig_sizes:
-            try:
-                count += int(w)
-            except ValueError:
-                value_error = True
-        total_error = False
-        if count != int(sum(sig_sizes) / 4):
-            total_error = True
-        else:
-            pass
-        msg = sig_base_msg
-        if value_error:
-            msg += "\n\nInputs must be whole numbers!"
-        if total_error:
-            msg += "\n\nInputs do not total {}!".format(int(sum(sig_sizes) / 4))
-        if True in (value_error, total_error):
-            happy = False
-        else:
-            happy = True
-    for i, s in enumerate(working_sig_sizes):
-        sig_sizes[i] = int(s) * 4
-
-    # Get output dir
-    print("\nSelect Output File...")
-    output_file_name = easygui.filesavebox("Select Save Location", "", "ouput.pdf", "*.pdf")
-    if output_file_name is None:
-        return None
+            if output_file_name.upper().endswith(".PDF"):
+                pass
+            else:
+                output_file_name = output_file_name + ".pdf"
+        print(output_file_name)
     else:
-        if output_file_name.upper().endswith(".PDF"):
-            pass
-        else:
-            output_file_name = output_file_name + ".pdf"
-    print(output_file_name)
+        output_file_name = os.path.join(os.path.dirname(file_name), "output_book.pdf")
 
     # Run pdf merging
     print("\nOrdering pages:")
@@ -358,7 +378,9 @@ def main():
     output_fh.close()
     # Close the input stream
     input_fh.close()
-    easygui.msgbox("Done!")
+    if not params_given:
+        easygui.msgbox("Done!")
+    return output_file_name
 
 
 def alt_flip():
@@ -386,13 +408,16 @@ def alt_flip():
 
 
 if __name__ == '__main__':
-    choices = ["Book Format", "Multi-page Format", "Double-up Format", "Close"]
-    choice = easygui.buttonbox("", "", choices)
-    if choice == choices[0]:
-        main()
-    elif choice == choices[1]:
-        multi_page_format()
-    elif choice == choices[2]:
-        double_up_format()
+    if len(sys.argv) == 1:
+        choices = ["Book Format", "Multi-page Format", "Double-up Format", "Close"]
+        choice = easygui.buttonbox("", "", choices)
+        if choice == choices[0]:
+            main()
+        elif choice == choices[1]:
+            multi_page_format()
+        elif choice == choices[2]:
+            double_up_format()
+        else:
+            pass
     else:
-        pass
+        double_up_format(main(sys.argv[1], int(sys.argv[2])))
