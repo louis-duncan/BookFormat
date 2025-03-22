@@ -1,6 +1,10 @@
 import os
+from typing import Union, Optional, List, Tuple
+
+import pathlib
 
 from PyPDF2 import PdfFileReader, PdfFileWriter, pdf
+import fitz
 import easygui
 import sys
 
@@ -115,6 +119,7 @@ def multi_page_format():
     else:
         easygui.msgbox("The document should have an even number of pages.\n"
                        "This document has {} pages, and so a blank page will be added at the end.")
+
     output_file_name = easygui.filesavebox("Select save location:", "", "multi-page.pdf", "*.pdf")
     if output_file_name is None:
         return None
@@ -123,7 +128,7 @@ def multi_page_format():
 
     new_page_height = 297  # In mm !
     new_page_width = 210  # In mm !
-    final_page_height = 125   # In mm !
+    final_page_height = 129   # In mm !
 
     # Convert mm to inches, then to the PDF space
     new_page_height = float((new_page_height * 0.03937007874) / (1 / 72))
@@ -184,10 +189,10 @@ def multi_page_format():
     easygui.msgbox("Done!")
 
 
-def double_up_format(file_name=None):
+def double_up_format(file_name=None, output_path=None):
     params_given = file_name is not None
     if file_name is None:
-        file_name = easygui.fileopenbox("Select PDF to format:","","*.pdf", ["*.pdf", "*.*"])
+        file_name = easygui.fileopenbox("Select PDF to format:", "", "*.pdf", ["*.pdf", "*.*"])
         if file_name is None:
             return None
         else:
@@ -202,20 +207,16 @@ def double_up_format(file_name=None):
         easygui.msgbox("The document should have an even number of pages.\n"
                        "This document has {} pages, and so a blank page will be added at the end.")
 
-    if params_given:
-        output_file_name = os.path.join(os.path.dirname(file_name), "output_double_up.pdf")
-    else:
-        output_file_name = easygui.filesavebox("Select save location:", "", "double-up.pdf", "*.pdf")
-        if output_file_name is None:
+    if output_path is None:
+        output_path = easygui.filesavebox("Select save location:", "", "double-up.pdf", "*.pdf")
+        if output_path is None:
             return None
-        else:
-            pass
 
-    # Give sizes for new pages, they will ba A4.
+    # Give sizes for new pages, they will be A4.
     new_page_height = 297  # In mm !
     new_page_width = 210  # In mm !
     # This is the height we want our input pages to be scaled to.
-    final_page_height = 124   # In mm !
+    final_page_height = 135   # In mm !
 
     # Convert mm to inches, then to the PDF space
     new_page_height = float((new_page_height * 0.03937007874) / (1 / 72))
@@ -251,7 +252,7 @@ def double_up_format(file_name=None):
     print("\nSaving...")
     for op in output_pages:
         output_stream.addPage(op)
-    output_fh = open(output_file_name, "bw")
+    output_fh = open(output_path, "bw")
     output_stream.write(output_fh)
     # Close the output stream
     output_fh.close()
@@ -261,20 +262,20 @@ def double_up_format(file_name=None):
         easygui.msgbox("Done!")
 
 
-def main(file_name=None, number_of_sigs=None):
-    params_given = (file_name is not None) or (number_of_sigs is not None)
-    if file_name is None:
+def main(input_path=None, output_path=None, number_of_sigs=None):
+    params_given = (input_path is not None) or (number_of_sigs is not None)
+    if input_path is None:
         # Get file
         print("Select Source File...")
-        file_name = easygui.fileopenbox("Select File", "", "*.pdf", ["\\*.pdf", "*.*"])
-    if file_name is None:
+        input_path = easygui.fileopenbox("Select File", "", "*.pdf", ["\\*.pdf", "*.*"])
+    if input_path is None:
         return None
     else:
         pass
-    print(file_name)
+    print(input_path)
 
     # Get number of sigs
-    input_fh = open(file_name, "rb")
+    input_fh = open(input_path, "rb")
     reader = PdfFileReader(input_fh, strict=False)
     number_of_pages = reader.getNumPages()
     if number_of_pages % 4 == 0:
@@ -349,19 +350,18 @@ def main(file_name=None, number_of_sigs=None):
         for i, s in enumerate(working_sig_sizes):
             sig_sizes[i] = int(s) * 4
 
-        # Get output dir
+    # Get output dir
+    if output_path is None:
         print("\nSelect Output File...")
-        output_file_name = easygui.filesavebox("Select Save Location", "", "output.pdf", "*.pdf")
-        if output_file_name is None:
-            return None
-        else:
-            if output_file_name.upper().endswith(".PDF"):
-                pass
-            else:
-                output_file_name = output_file_name + ".pdf"
-        print(output_file_name)
+        output_path = easygui.filesavebox("Select Save Location", "", "output.pdf", "*.pdf")
+    if output_path is None:
+        return None
     else:
-        output_file_name = os.path.join(os.path.dirname(file_name), "output_book.pdf")
+        if output_path.upper().endswith(".PDF"):
+            pass
+        else:
+            output_path = output_path + ".pdf"
+    print(f"{output_path=}")
 
     # Run pdf merging
     print("\nOrdering pages:")
@@ -372,7 +372,7 @@ def main(file_name=None, number_of_sigs=None):
     print("\nSaving...")
     for op in output_pages:
         output_stream.addPage(op)
-    output_fh = open(output_file_name, "bw")
+    output_fh = open(output_path, "bw")
     output_stream.write(output_fh)
     # Close the output stream
     output_fh.close()
@@ -380,7 +380,7 @@ def main(file_name=None, number_of_sigs=None):
     input_fh.close()
     if not params_given:
         easygui.msgbox("Done!")
-    return output_file_name
+    return output_path
 
 
 def alt_flip():
@@ -407,17 +407,90 @@ def alt_flip():
     output_stream.write(output_fh)
 
 
-if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        choices = ["Book Format", "Multi-page Format", "Double-up Format", "Close"]
-        choice = easygui.buttonbox("", "", choices)
-        if choice == choices[0]:
-            main()
-        elif choice == choices[1]:
-            multi_page_format()
-        elif choice == choices[2]:
-            double_up_format()
+def add_border(input_path=None, output_path=None,
+               pages: Optional[Union[int, List[int]]] = None,
+               width: Optional[int] = None, height: Optional[int] = None):
+    if input_path is None:
+        input_path = easygui.fileopenbox()
+    if input_path is None:
+        return
+
+    if pages is None:
+        pages = easygui.enterbox(
+            "Which pages should be bordered:\nCan be a single number, comma seperated numbers, or -1 for all",
+            default="-1"
+        )
+    if isinstance(pages, str):
+        if "," in pages:
+            pages = [int(p.strip()) for p in pages.split(",")]
         else:
-            pass
-    else:
+            pages = int(pages.strip())
+
+    doc = fitz.open(input_path)
+    for i, page in enumerate(doc):
+        if pages == -1 or i == pages or (isinstance(pages, list) and i in pages):
+            size = [0, 0, page.rect.width if width is None else width, page.rect.height if height is None else height]
+            print("page", i, page.rect.width, page.rect.height)
+            page.draw_rect(size, color=(0, 0, 0), width=0)
+
+    if output_path is None:
+        output_path = easygui.filesavebox(default="bordered.pdf")
+    if output_path is None:
+        return
+    doc.save(output_path)
+
+
+def add_lines(input_path=None, output_path=None):
+    if input_path is None:
+        input_path = easygui.fileopenbox()
+    if input_path is None:
+        return
+
+    doc = fitz.open(input_path)
+    for i, page in enumerate(doc):
+        if i == doc.chapter_page_count(0) - 1:
+            page.draw_line((page.rect.width, 0), (page.rect.width, page.rect.height), color=(0, 0, 0), width=1)
+            page.draw_line((0, 0), (page.rect.width, 0), color=(0, 0, 0), width=1)
+
+    if output_path is None:
+        output_path = easygui.filesavebox(default="lined.pdf")
+    if output_path is None:
+        return
+    doc.save(output_path)
+
+
+def full_flow():
+    input_path = easygui.fileopenbox()
+    if input_path is None:
+        return
+    input_path = pathlib.Path(input_path)
+    default_output_path = input_path.parent / "final.pdf"
+    output_path = easygui.filesavebox(default=str(default_output_path))
+    if output_path is None:
+        return
+
+    add_lines(input_path, "lined.pdf")
+    main("lined.pdf", "signatures.pdf", 7)
+    double_up_format("signatures.pdf", output_path)
+
+
+if __name__ == '__main__':
+    run = True
+    if len(sys.argv) == 2:
         double_up_format(main(sys.argv[1], int(sys.argv[2])))
+    else:
+        while run:
+            choices = ["Book Format", "Multi-page Format", "Double-up Format", "Add Border", "Full Flow", "Close"]
+            choice = easygui.buttonbox("", "", choices)
+            if choice == choices[0]:
+                main()
+            elif choice == choices[1]:
+                multi_page_format()
+            elif choice == choices[2]:
+                double_up_format()
+            elif choice == choices[3]:
+                add_border()
+            elif choice == choices[4]:
+                full_flow()
+            else:
+                run = False
