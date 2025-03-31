@@ -4,8 +4,5 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pypdf2 = "==1.26.0"
+pypdf = "*"
 easygui = "*"
-pymupdf = "*"
-
-[dev-packages]
