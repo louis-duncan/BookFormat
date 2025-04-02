@@ -6,3 +6,6 @@ name = "pypi"
 [packages]
 pypdf = "*"
 easygui = "*"
+pyqt6 = "*"
+
+[dev-packages]
