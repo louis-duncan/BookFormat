@@ -1,7 +1,6 @@
 import logging
 from math import ceil, inf
 from pathlib import Path
-from token import LEFTSHIFT
 
 from PyQt6.QtWidgets import QApplication, QPushButton, QMainWindow, QVBoxLayout, QGridLayout, QLabel, QSpinBox, QWidget, \
     QHBoxLayout, QFileDialog, QMessageBox
@@ -29,7 +28,6 @@ class MainWindow(QMainWindow):
         l_input_document.addWidget(self.w_input_document_label)
         l_input_document.addStretch()
 
-
         l_num_signatures = QHBoxLayout()
         l_num_signatures.addWidget(QLabel("Number of Signatures:"))
         self.w_num_sigs = QSpinBox()
@@ -45,10 +43,13 @@ class MainWindow(QMainWindow):
         self.sig_size_spins: list[QSpinBox] = []
         self.number_of_signatures_changed(self.w_num_sigs.value())
 
+        self.w_sigs_error_label = QLabel("")
+
         layout = QVBoxLayout()
         layout.addLayout(l_input_document)
         layout.addLayout(l_num_signatures)
         layout.addLayout(self.l_signature_sizes)
+        layout.addWidget(self.w_sigs_error_label)
 
         widget = QWidget()
         widget.setLayout(layout)
@@ -86,6 +87,7 @@ class MainWindow(QMainWindow):
                 for size, size_control in zip(sig_sizes, self.sig_size_spins):
                     size_control.setValue(size)
             self.l_signature_sizes.addWidget(w)
+            w.valueChanged.connect(self.check_sheet_counts)
 
     def read_input_file(self):
         if self.input_document_path:
@@ -120,6 +122,16 @@ class MainWindow(QMainWindow):
                 n += 1
                 self.w_num_sigs.setValue(n)
                 max_size = max([s.value() for s in self.sig_size_spins])
+
+    def check_sheet_counts(self, _):
+        if self.pdf_reader is None:
+            self.w_sigs_error_label.setText("")
+        else:
+            num_sheets = sum([s.value() for s in self.sig_size_spins])
+            if num_sheets * 4 != self.pdf_reader.get_num_pages():
+                self.w_sigs_error_label.setText(f"Incorrect number of sheets: {num_sheets}")
+            else:
+                self.w_sigs_error_label.setText("")
 
 
 def calc_signature_sizes(num_pages: int, num_signatures: int) -> list[int]:
