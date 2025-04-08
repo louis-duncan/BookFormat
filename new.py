@@ -1,14 +1,39 @@
+import io
+import json
 import logging
-from math import ceil, inf
+import time
+from json import JSONDecodeError
+from math import ceil
 from pathlib import Path
+from typing import Generator
 
-from PyQt6.QtWidgets import QApplication, QPushButton, QMainWindow, QVBoxLayout, QGridLayout, QLabel, QSpinBox, QWidget, \
-    QHBoxLayout, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import (
+    QApplication,
+    QPushButton,
+    QMainWindow,
+    QVBoxLayout,
+    QLabel,
+    QSpinBox,
+    QWidget,
+    QHBoxLayout,
+    QFileDialog,
+    QMessageBox,
+    QLineEdit,
+    QStyleFactory,
+    QGridLayout, QCheckBox, QDoubleSpinBox, QProgressBar, QSizePolicy,
+)
+from PyQt6.QtCore import Qt, QCoreApplication
 
-from pypdf import PdfReader, PdfWriter, PaperSize
+from pypdf import PdfReader, PdfWriter, PaperSize, Transformation, PageObject
+from pypdf.annotations import Line, PolyLine
+from pypdf.generic import RectangleObject, FloatObject, ArrayObject, NameObject
 
 VERSION = "2.0.0"
 IDEAL_MAX_SIG_SIZE = 4
+ALIGN_LEFT = Qt.AlignmentFlag.AlignLeft
+ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight
+ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
+SETTINGS_PATH = Path("./settings.json")
 
 
 class MainWindow(QMainWindow):
@@ -17,7 +42,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Louis' Book Formatter - {VERSION}")
 
         self.pdf_reader: None | PdfReader = None
-        self.pdf_writer = PdfWriter()
 
         l_input_document = QHBoxLayout()
         w_input_browse_button = QPushButton("Browse")
@@ -35,25 +59,124 @@ class MainWindow(QMainWindow):
         self.w_num_sigs.setValue(5)
         self.w_num_sigs.valueChanged.connect(self.number_of_signatures_changed)
         l_num_signatures.addWidget(self.w_num_sigs)
-        self.w_num_pages_label = QLabel("")
-        l_num_signatures.addWidget(self.w_num_pages_label)
         l_num_signatures.addStretch()
+        l_num_signatures.addWidget(QLabel("Pages:"))
+        self.w_start_page = QSpinBox()
+        self.w_start_page.setMinimum(1)
+        self.w_start_page.setMaximum(1)
+        self.w_start_page.setSingleStep(4)
+        self.w_start_page.valueChanged.connect(self.update_signature_suggestions)
+        self.w_end_page = QSpinBox()
+        self.w_end_page.setMinimum(4)
+        self.w_end_page.setMaximum(4)
+        self.w_end_page.setSingleStep(4)
+        self.w_end_page.valueChanged.connect(self.update_signature_suggestions)
+        l_num_signatures.addWidget(self.w_start_page)
+        l_num_signatures.addWidget(self.w_end_page)
+
 
         self.l_signature_sizes = QHBoxLayout()
         self.sig_size_spins: list[QSpinBox] = []
         self.number_of_signatures_changed(self.w_num_sigs.value())
+        w_spins = QWidget()
+        w_spins.setLayout(self.l_signature_sizes)
+        w_spins.setStyleSheet("border: 1px dashed yellow")
 
+        l_sig_error_note = QHBoxLayout()
         self.w_sigs_error_label = QLabel("")
+        l_sig_error_note.addWidget(self.w_sigs_error_label)
+        l_sig_error_note.addStretch()
+        self.w_num_pages_label = QLabel("")
+        l_sig_error_note.addWidget(self.w_num_pages_label)
 
-        layout = QVBoxLayout()
-        layout.addLayout(l_input_document)
-        layout.addLayout(l_num_signatures)
-        layout.addLayout(self.l_signature_sizes)
-        layout.addWidget(self.w_sigs_error_label)
+        l_options = QGridLayout()
+        l_options.addWidget(QLabel("Add Side Lines to Last Page:"), 0, 0, ALIGN_RIGHT)
+        self.w_add_side_lines = QCheckBox()
+        l_options.addWidget(self.w_add_side_lines, 0, 1, ALIGN_LEFT)
+        l_options.addWidget(QLabel("Double Up:"), 0, 2, ALIGN_RIGHT)
+        self.w_double_up = QCheckBox()
+        l_options.addWidget(self.w_double_up, 0, 3, ALIGN_LEFT)
+        l_options.addWidget(QLabel("Double Up Scale:"), 1, 2, ALIGN_RIGHT)
+        self.w_double_up_scale = QDoubleSpinBox()
+        self.w_double_up_scale.setMaximum(100)
+        self.w_double_up_scale.setValue(100)
+        l_options.addWidget(self.w_double_up_scale, 1, 3, ALIGN_LEFT)
 
-        widget = QWidget()
-        widget.setLayout(layout)
-        self.setCentralWidget(widget)
+        l_output_document = QHBoxLayout()
+        w_output_browse_button = QPushButton("Browse")
+        w_output_browse_button.pressed.connect(self.select_output_path)
+        self.w_output_document_label = QLabel("Select output document...")
+        self.output_document_path = ""
+        l_output_document.addWidget(w_output_browse_button)
+        l_output_document.addWidget(self.w_output_document_label)
+        l_output_document.addStretch(1)
+        l_output_document.addWidget(QLabel("Save Signatures Separately:"))
+        self.w_save_signatures_separately = QCheckBox()
+        l_output_document.addWidget(self.w_save_signatures_separately)
+
+        self.w_start_process = QPushButton("Start Process")
+        self.w_start_process.pressed.connect(self.process_document)
+        self.w_start_process.setDisabled(True)
+
+        l_all_settings = QVBoxLayout()
+        l_all_settings.addLayout(l_input_document)
+        l_all_settings.addLayout(l_num_signatures)
+        l_all_settings.addWidget(w_spins)
+        l_all_settings.addLayout(l_sig_error_note)
+        l_all_settings.addLayout(l_options)
+        l_all_settings.addLayout(l_output_document)
+        l_all_settings.addWidget(self.w_start_process, alignment=ALIGN_CENTER)
+
+        self.w_progress_bar = QProgressBar()
+        self.w_progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.w_progress_bar.hide()
+        self.w_progress_label = QLabel()
+        self.w_progress_label.hide()
+
+        self.settings_widget = QWidget()
+        self.settings_widget.setLayout(l_all_settings)
+
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(self.settings_widget)
+        main_layout.addWidget(self.w_progress_bar)
+        main_layout.addWidget(self.w_progress_label, alignment=ALIGN_CENTER)
+
+        main_widget = QWidget()
+        main_widget.setLayout(main_layout)
+        self.setCentralWidget(main_widget)
+
+        self.load_settings()
+
+    def load_settings(self):
+        try:
+            with SETTINGS_PATH.open("r") as fh:
+                settings_data = json.load(fh)
+            self.w_add_side_lines.setChecked(settings_data['add_side_lines'])
+            self.w_double_up.setChecked(settings_data['double_up'])
+            self.w_double_up_scale.setValue(settings_data['double_up_scale'])
+            self.w_save_signatures_separately.setChecked(settings_data['save_signatures_separately'])
+
+        except FileNotFoundError:
+            logging.debug("No settings file")
+        except JSONDecodeError as e:
+            logging.exception(e)
+
+    def save_settings(self):
+        try:
+            settings_data = {
+                'add_side_lines': self.w_add_side_lines.isChecked(),
+                'double_up': self.w_double_up.isChecked(),
+                'double_up_scale': self.w_double_up_scale.value(),
+                'save_signatures_separately': self.w_save_signatures_separately.isChecked()
+            }
+            with open(SETTINGS_PATH, "w") as fh:
+                # noinspection PyTypeChecker
+                json.dump(settings_data, fh)
+        except Exception as e:
+            logging.exception(e)
+
+    def get_num_pages(self):
+        return (self.w_end_page.value() - self.w_start_page.value()) + 1
 
     def select_input_path(self):
         if self.input_document_path:
@@ -70,6 +193,33 @@ class MainWindow(QMainWindow):
             self.w_input_document_label.setText(file_path)
             self.input_document_path = file_path
             self.read_input_file()
+            if self.input_document_path and self.output_document_path:
+                self.w_start_process.setDisabled(False)
+            else:
+                self.w_start_process.setDisabled(True)
+        else:
+            pass
+
+    def select_output_path(self):
+        if self.output_document_path:
+            start_dir = str(Path(self.output_document_path).parent)
+        elif self.input_document_path:
+            start_dir = str(Path(self.input_document_path).parent)
+        else:
+            start_dir = "${HOME}"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select File",
+            start_dir + "/output.pdf",
+            "PDF Files (*.pdf)",
+        )
+        if file_path:
+            self.w_output_document_label.setText(file_path)
+            self.output_document_path = file_path
+            if self.input_document_path and self.output_document_path:
+                self.w_start_process.setDisabled(False)
+            else:
+                self.w_start_process.setDisabled(True)
         else:
             pass
 
@@ -83,7 +233,7 @@ class MainWindow(QMainWindow):
             if self.pdf_reader is None:
                 w.setValue(1)
             else:
-                sig_sizes = calc_signature_sizes(self.pdf_reader.get_num_pages(), n)
+                sig_sizes = calc_signature_sizes(self.get_num_pages(), n)
                 for size, size_control in zip(sig_sizes, self.sig_size_spins):
                     size_control.setValue(size)
             self.l_signature_sizes.addWidget(w)
@@ -92,17 +242,18 @@ class MainWindow(QMainWindow):
     def read_input_file(self):
         if self.input_document_path:
             self.pdf_reader = PdfReader(self.input_document_path)
+            num_pages = self.pdf_reader.get_num_pages()
 
-            if self.pdf_reader.get_num_pages() % 4 == 0:
-                self.w_num_pages_label.setText(
-                    f"({self.pdf_reader.get_num_pages()} pages, {self.pdf_reader.get_num_pages() // 4} sheets)"
-                )
+            if num_pages % 4 == 0:
+                self.w_start_page.setMaximum(num_pages - 3)
+                self.w_end_page.setMaximum(num_pages)
+                self.w_end_page.setValue(num_pages)
                 self.update_signature_suggestions()
             else:
                 QMessageBox.critical(
                     self,
                     "Bad File",
-                    f"Input PDF must have a number of pages divisible by 4, has {self.pdf_reader.get_num_pages()}.",
+                    f"Input PDF must have a number of pages divisible by 4, has {num_pages}.",
                     buttons=QMessageBox.StandardButton.Ok
                 )
                 self.pdf_reader = None
@@ -112,26 +263,210 @@ class MainWindow(QMainWindow):
             logging.error(f"Cannot read input file, input path is {repr(self.input_document_path)}")
 
     def update_signature_suggestions(self):
+        logging.debug("Fired update signatures")
         if self.pdf_reader is None:
             logging.error("Cannot update suggested signatures, reader is None")
         else:
-            num_pages = self.pdf_reader.get_num_pages()
-            max_size = num_pages
+            self.w_start_page.setMaximum(self.w_end_page.value() - 3)
+            self.w_end_page.setMinimum(self.w_start_page.value() + 3)
+            num_pages = self.get_num_pages()
+            self.w_num_pages_label.setText(
+                f"({num_pages} pages, {num_pages // 4} sheets)"
+            )
+            max_size = num_pages // 4
             n = 0
-            while max_size > IDEAL_MAX_SIG_SIZE:
+            has_looped = False
+            force_update = False
+            if len(self.sig_size_spins) == 1:
+                force_update = True
+            while max_size > IDEAL_MAX_SIG_SIZE or not has_looped:
                 n += 1
                 self.w_num_sigs.setValue(n)
+                if force_update:
+                    self.number_of_signatures_changed(n)
+                    force_update = False
                 max_size = max([s.value() for s in self.sig_size_spins])
+                has_looped = True
+            self.w_sigs_error_label.setText("")
 
     def check_sheet_counts(self, _):
         if self.pdf_reader is None:
             self.w_sigs_error_label.setText("")
         else:
             num_sheets = sum([s.value() for s in self.sig_size_spins])
-            if num_sheets * 4 != self.pdf_reader.get_num_pages():
+            if num_sheets * 4 != self.get_num_pages():
                 self.w_sigs_error_label.setText(f"Incorrect number of sheets: {num_sheets}")
             else:
                 self.w_sigs_error_label.setText("")
+
+    def closeEvent(self, a0):
+        self.save_settings()
+        super().closeEvent(a0)
+
+    def process_document(self):
+        if self.pdf_reader is None:
+            raise ValueError("Should not have access process function without a pdfreader loaded.")
+
+        self.settings_widget.setDisabled(True)
+        self.w_progress_bar.show()
+        self.w_progress_label.show()
+        self.w_start_process.setDisabled(True)
+
+        if self.w_add_side_lines.isChecked():
+            logging.debug("Adding lines")
+            line_writer = PdfWriter(self.pdf_reader)
+            page_width = self.pdf_reader.pages[0].mediabox.width
+            page_height = self.pdf_reader.pages[0].mediabox.height
+
+            annotation = Line(
+                text="Hello World\nLine2",
+                rect=(50, 550, 200, 650),
+                p1=(50, 550),
+                p2=(200, 650),
+            )
+            line_writer.add_annotation(page_number=0, annotation=annotation)
+
+            top_p1 = (0, page_height)
+            top_p2 = (page_width, page_height)
+            top_line = Line(
+                p1=top_p1,
+                p2=top_p2,
+                rect=top_p1 + top_p2
+            )
+            top_line[NameObject("/C")] = ArrayObject(
+                [FloatObject(0.0), FloatObject(0.0), FloatObject(0.0)]
+            )
+            side_p1 = (page_width, 0)
+            side_p2 = (page_width, page_height)
+            side_line = Line(
+                p1=side_p1,
+                p2=side_p2,
+                rect=side_p1 + side_p2
+            )
+            side_line[NameObject("/C")] = ArrayObject(
+                [FloatObject(0.0), FloatObject(0.0), FloatObject(0.0)]
+            )
+            page_index = line_writer.get_num_pages() - 1
+            line_writer.add_annotation(page_index, top_line)
+            line_writer.add_annotation(page_index, side_line)
+            output_bytes = io.BytesIO()
+            line_writer.write(output_bytes)
+            output_bytes.seek(0)
+            with open("lined.pdf", "wb") as fh:
+                fh.write(output_bytes.read())
+            output_bytes.seek(0)
+            self.pdf_reader = PdfReader(output_bytes)
+
+        self.w_progress_label.setText("Creating signatures...")
+        total_sides = self.get_num_pages() // 2
+        self.w_progress_bar.setMaximum(total_sides)
+
+        sig_sizes = [s.value() for s in self.sig_size_spins]
+        signatures: list[PdfWriter] = []
+        for page_range in get_signature_page_indexes(sig_sizes, self.w_start_page.value() - 1):
+            signatures.append(
+                create_signature(
+                    self.pdf_reader,
+                    page_range,
+                    self.w_progress_bar
+                )
+            )
+
+        if self.w_double_up.isChecked():
+            ...
+
+        self.w_progress_bar.reset()
+        self.w_progress_bar.setMaximum(len(signatures))
+
+        if self.w_save_signatures_separately.isChecked():
+            self.w_progress_label.setText("Saving signatures...")
+            for i, s in enumerate(signatures):
+                file_name, ext = self.output_document_path.rsplit(".", 1)
+                with open(file_name + f"_{i}." + ext, "bw") as fh:
+                    writer = PdfWriter()
+                    for page in s.pages:
+                        writer.insert_page(page, writer.get_num_pages())
+                    writer.write(fh)
+                    writer.close()
+                    self.w_progress_bar.setValue(self.w_progress_bar.value() + 1)
+                    QCoreApplication.processEvents()
+        else:
+            merger = PdfWriter()
+            self.w_progress_label.setText("Merging Signatures...")
+            for s in signatures:
+                for page in s.pages:
+                    merger.insert_page(page, merger.get_num_pages())
+                    self.w_progress_bar.setValue(self.w_progress_bar.value() + 1)
+                    QCoreApplication.processEvents()
+
+            self.w_progress_label.setText("Saving output PDF...")
+            with open(self.output_document_path, "bw") as fh:
+                merger.write(fh)
+                merger.close()
+
+        self.w_progress_bar.hide()
+        self.w_progress_label.setText("Done!")
+        self.settings_widget.setDisabled(False)
+
+
+def create_signature(
+        reader: PdfReader,
+        pages: tuple[int, int],
+        progress_bar: None | QProgressBar = None
+) -> PdfWriter:
+    page_width = reader.pages[0].mediabox.width
+    page_height = reader.pages[0].mediabox.height
+    new_sheet_size = (2 * page_width, page_height)
+
+    new_pdf = PdfWriter("")
+
+    left_transform = Transformation().translate(
+        tx = (new_sheet_size[0] // 2) - page_width,
+        ty = (new_sheet_size[1] - page_height) // 2
+    )
+    right_transform = Transformation().translate(
+        tx = new_sheet_size[0] // 2,
+        ty = (new_sheet_size[1] - page_height) // 2
+    )
+
+    for left_index, right_index in gen_signature_page_orderings(pages):
+        new_pdf.add_blank_page(*new_sheet_size)
+        new_page = new_pdf.pages[-1]
+        try:
+            logging.debug(f"Reading pages: {left_index}, {right_index}")
+            new_page.merge_transformed_page(reader.pages[left_index], left_transform)
+            new_page.merge_transformed_page(reader.pages[right_index], right_transform)
+        except IndexError as e:
+            logging.exception(e)
+            logging.error(f"Attempted to read pages: {left_index}, {right_index}")
+            raise e
+
+        if progress_bar is not None:
+            progress_bar.setValue(progress_bar.value() + 1)
+            QCoreApplication.processEvents()
+
+    return new_pdf
+
+
+def gen_signature_page_orderings(pages: tuple[int, int]) -> Generator[tuple[int, int], None, None]:
+    num_pages = (pages[1] - pages[0]) + 1
+    flip = True
+    for i in range(num_pages // 2):
+        if flip:
+            yield pages[1] - i, pages[0] + i
+        else:
+            yield pages[0] + i, pages[1] - i
+        flip = not flip
+
+
+def get_signature_page_indexes(signature_sizes: list[int], start_index=0) -> list[tuple[int, int]]:
+    """Takes signature sizes (sheets) and returns page indexes."""
+    signature_ranges: list[tuple[int, int]] = []
+    current_page = start_index
+    for sig in signature_sizes:
+        signature_ranges.append((current_page, current_page + (sig * 4) - 1))
+        current_page += (sig * 4)
+    return signature_ranges
 
 
 def calc_signature_sizes(num_pages: int, num_signatures: int) -> list[int]:
@@ -194,19 +529,8 @@ def calc_signature_page_ranges(signature_sizes: list[int]) -> list[tuple[int, in
     return page_blocks
 
 
-def test():
-    with open("handbook.pdf", "rb") as fh:
-        reader = PdfReader(fh)
-
-    writer = PdfWriter()
-    writer.add_blank_page(width=PaperSize.A4.width, height=PaperSize.A4.height)
-
-    with open("test.pdf", "bw") as fh:
-        writer.write(fh)
-        writer.close()
-
-
 def main():
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)-8s %(message)s')
     app = QApplication([])
 
     window = MainWindow()

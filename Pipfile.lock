@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "a5bc8b96d45f73d898b3f71e018e935b5cb2fde526911585f92ede1ddbb790e0"
+            "sha256": "58b69b069f34244082799e8d519a123562151f9f35aa37c94c33a86dcab7c40f"
         },
         "pipfile-spec": 6,
         "requires": {},
@@ -14,22 +14,14 @@
         ]
     },
     "default": {
-        "easygui": {
-            "hashes": [
-                "sha256:33498710c68b5376b459cd3fc48d1d1f33822139eb3ed01defbc0528326da3ba",
-                "sha256:d653ff79ee1f42f63b5a090f2f98ce02335d86ad8963b3ce2661805cafe99a04"
-            ],
-            "index": "pypi",
-            "version": "==0.98.3"
-        },
         "pypdf": {
             "hashes": [
-                "sha256:9af476a9dc30fcb137659b0dec747ea94aa954933c52cf02ee33e39a16fe9175",
-                "sha256:db994ab47cadc81057ea1591b90e5b543e2b7ef2d0e31ef41a9bfe763c119dab"
+                "sha256:5c536ec0f7af8e2f80eb32806964652a562b9abc5477b3c195e2b842725ce55b",
+                "sha256:67603e2e96cdf70e676564520933c017d450f16075b9966be5fee128812ace8c"
             ],
             "index": "pypi",
-            "markers": "python_version >= '3.8'",
-            "version": "==5.4.0"
+            "markers": "python_version >= '3.6'",
+            "version": "==5.0.0"
         },
         "pyqt6": {
             "hashes": [

@@ -4,8 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pypdf = "*"
-easygui = "*"
 pyqt6 = "*"
+pypdf = "==5.0.0"
 
 [dev-packages]
