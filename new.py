@@ -28,12 +28,13 @@ class MainWindow(wx.Frame):
 
         w_browse = wx.Button(root, label="Browse")
         w_input_text = wx.StaticText(root, label="Select input document...")
-        s_input = wx.BoxSizer(wx.HORIZONTAL)
+        s_input = wx.StaticBoxSizer(wx.HORIZONTAL, root, "Input")
         s_input.Add(w_browse)
         s_input.Add(w_input_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=10)
 
         s_main = wx.BoxSizer(wx.VERTICAL)
-        s_main.Add(s_input, flag=wx.ALIGN_CENTER_HORIZONTAL)
+        s_main.Add(s_input, flag=wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, border=5)
+        s_main.AddSpacer(1)
 
         root.SetSizer(s_main)
 
