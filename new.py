@@ -25,8 +25,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QCoreApplication
 
 from pypdf import PdfReader, PdfWriter, PaperSize, Transformation, PageObject
-from pypdf.annotations import Line, PolyLine
+from pypdf.annotations import Line, PolyLine, Rectangle
 from pypdf.generic import RectangleObject, FloatObject, ArrayObject, NameObject
+from pypdf.papersizes import Dimensions
 
 VERSION = "2.0.0"
 IDEAL_MAX_SIG_SIZE = 4
@@ -318,34 +319,28 @@ class MainWindow(QMainWindow):
             page_width = self.pdf_reader.pages[0].mediabox.width
             page_height = self.pdf_reader.pages[0].mediabox.height
 
-            annotation = Line(
-                text="Hello World\nLine2",
-                rect=(50, 550, 200, 650),
-                p1=(50, 550),
-                p2=(200, 650),
-            )
-            line_writer.add_annotation(page_number=0, annotation=annotation)
-
-            top_p1 = (0, page_height)
-            top_p2 = (page_width, page_height)
-            top_line = Line(
-                p1=top_p1,
-                p2=top_p2,
-                rect=top_p1 + top_p2
+            top_line = Rectangle(
+                rect=(
+                    0, page_height - 0.25,
+                    page_width, page_height
+                ),
+                interior_color="#000000"
             )
             top_line[NameObject("/C")] = ArrayObject(
-                [FloatObject(0.0), FloatObject(0.0), FloatObject(0.0)]
+                [FloatObject(0.0)]
             )
-            side_p1 = (page_width, 0)
-            side_p2 = (page_width, page_height)
-            side_line = Line(
-                p1=side_p1,
-                p2=side_p2,
-                rect=side_p1 + side_p2
+
+            side_line = Rectangle(
+                rect=(
+                    page_width - 0.25, 0,
+                    page_width, page_height
+                ),
+                interior_color="#000000"
             )
             side_line[NameObject("/C")] = ArrayObject(
                 [FloatObject(0.0), FloatObject(0.0), FloatObject(0.0)]
             )
+
             page_index = line_writer.get_num_pages() - 1
             line_writer.add_annotation(page_index, top_line)
             line_writer.add_annotation(page_index, side_line)
@@ -373,7 +368,13 @@ class MainWindow(QMainWindow):
             )
 
         if self.w_double_up.isChecked():
-            ...
+            logging.info("Doubling up pages")
+            doubled_up_sigs = []
+            self.w_progress_bar.reset()
+            self.w_progress_label.setText("Creating doubled-up pages...")
+            for sig in signatures:
+                doubled_up_sigs.append(create_double_up(sig, progress_bar=self.w_progress_bar))
+            signatures = doubled_up_sigs
 
         self.w_progress_bar.reset()
         self.w_progress_bar.setMaximum(len(signatures))
@@ -446,6 +447,36 @@ def create_signature(
             QCoreApplication.processEvents()
 
     return new_pdf
+
+
+def create_double_up(
+        document: PdfReader | PdfWriter,
+        output_size: Dimensions = PaperSize.A4,
+        scale: float = 1.0,
+        progress_bar: None | QProgressBar = None
+) -> PdfWriter:
+    writer = PdfWriter()
+
+    scaled_size = document.pages[0].mediabox.width * scale, document.pages[0].mediabox.height * scale
+
+    bottom_y = (output_size.height // 2 - scaled_size[1]) // 2
+    top_y = bottom_y + (output_size.height // 2)
+    x = (output_size.width - scaled_size[0]) // 2
+
+    top_transform = Transformation().scale(scale, scale).translate(x, top_y)
+    bottom_transform = Transformation().scale(scale, scale).translate(x, bottom_y)
+
+    for original_page in document.pages:
+        writer.add_blank_page(output_size.width, output_size.height)
+        new_page = writer.pages[len(writer.pages) - 1]
+        new_page.merge_transformed_page(original_page, top_transform)
+        new_page.merge_transformed_page(original_page, bottom_transform)
+
+        if progress_bar is not None:
+            progress_bar.setValue(progress_bar.value() + 1)
+            QCoreApplication.processEvents()
+
+    return writer
 
 
 def gen_signature_page_orderings(pages: tuple[int, int]) -> Generator[tuple[int, int], None, None]:
