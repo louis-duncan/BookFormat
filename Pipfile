@@ -4,7 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-pyqt6 = "*"
 pypdf = "==5.0.0"
+wxpython = "*"
 
 [dev-packages]

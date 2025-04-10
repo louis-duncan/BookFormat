@@ -5,149 +5,43 @@ import time
 from json import JSONDecodeError
 from math import ceil
 from pathlib import Path
-from typing import Generator
-
-from PyQt6.QtWidgets import (
-    QApplication,
-    QPushButton,
-    QMainWindow,
-    QVBoxLayout,
-    QLabel,
-    QSpinBox,
-    QWidget,
-    QHBoxLayout,
-    QFileDialog,
-    QMessageBox,
-    QLineEdit,
-    QStyleFactory,
-    QGridLayout, QCheckBox, QDoubleSpinBox, QProgressBar, QSizePolicy,
-)
-from PyQt6.QtCore import Qt, QCoreApplication
+from typing import Generator, Any
 
 from pypdf import PdfReader, PdfWriter, PaperSize, Transformation, PageObject
 from pypdf.annotations import Line, PolyLine, Rectangle
 from pypdf.generic import RectangleObject, FloatObject, ArrayObject, NameObject
 from pypdf.papersizes import Dimensions
 
+import wx
+
+
 VERSION = "2.0.0"
 IDEAL_MAX_SIG_SIZE = 4
-ALIGN_LEFT = Qt.AlignmentFlag.AlignLeft
-ALIGN_RIGHT = Qt.AlignmentFlag.AlignRight
-ALIGN_CENTER = Qt.AlignmentFlag.AlignCenter
 SETTINGS_PATH = Path("./settings.json")
 
 
-class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle(f"Louis' Book Formatter - {VERSION}")
+class MainWindow(wx.Frame):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
 
-        self.pdf_reader: None | PdfReader = None
+        root = wx.Panel(self)
 
-        l_input_document = QHBoxLayout()
-        w_input_browse_button = QPushButton("Browse")
-        w_input_browse_button.pressed.connect(self.select_input_path)
-        self.w_input_document_label = QLabel("Select input document...")
-        self.input_document_path = ""
-        l_input_document.addWidget(w_input_browse_button)
-        l_input_document.addWidget(self.w_input_document_label)
-        l_input_document.addStretch()
+        w_browse = wx.Button(root, label="Browse")
+        w_input_text = wx.StaticText(root, label="Select input document...")
+        s_input = wx.BoxSizer(wx.HORIZONTAL)
+        s_input.Add(w_browse)
+        s_input.Add(w_input_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=10)
 
-        l_num_signatures = QHBoxLayout()
-        l_num_signatures.addWidget(QLabel("Number of Signatures:"))
-        self.w_num_sigs = QSpinBox()
-        self.w_num_sigs.setMinimum(1)
-        self.w_num_sigs.setValue(5)
-        self.w_num_sigs.valueChanged.connect(self.number_of_signatures_changed)
-        l_num_signatures.addWidget(self.w_num_sigs)
-        l_num_signatures.addStretch()
-        l_num_signatures.addWidget(QLabel("Pages:"))
-        self.w_start_page = QSpinBox()
-        self.w_start_page.setMinimum(1)
-        self.w_start_page.setMaximum(1)
-        self.w_start_page.setSingleStep(4)
-        self.w_start_page.valueChanged.connect(self.update_signature_suggestions)
-        self.w_end_page = QSpinBox()
-        self.w_end_page.setMinimum(4)
-        self.w_end_page.setMaximum(4)
-        self.w_end_page.setSingleStep(4)
-        self.w_end_page.valueChanged.connect(self.update_signature_suggestions)
-        l_num_signatures.addWidget(self.w_start_page)
-        l_num_signatures.addWidget(self.w_end_page)
+        s_main = wx.BoxSizer(wx.VERTICAL)
+        s_main.Add(s_input, flag=wx.ALIGN_CENTER_HORIZONTAL)
 
+        root.SetSizer(s_main)
 
-        self.l_signature_sizes = QHBoxLayout()
-        self.sig_size_spins: list[QSpinBox] = []
-        self.number_of_signatures_changed(self.w_num_sigs.value())
-        w_spins = QWidget()
-        w_spins.setLayout(self.l_signature_sizes)
-        w_spins.setStyleSheet("border: 1px dashed yellow")
+        s_main.Fit(self)
 
-        l_sig_error_note = QHBoxLayout()
-        self.w_sigs_error_label = QLabel("")
-        l_sig_error_note.addWidget(self.w_sigs_error_label)
-        l_sig_error_note.addStretch()
-        self.w_num_pages_label = QLabel("")
-        l_sig_error_note.addWidget(self.w_num_pages_label)
+        # self.load_settings()
 
-        l_options = QGridLayout()
-        l_options.addWidget(QLabel("Add Side Lines to Last Page:"), 0, 0, ALIGN_RIGHT)
-        self.w_add_side_lines = QCheckBox()
-        l_options.addWidget(self.w_add_side_lines, 0, 1, ALIGN_LEFT)
-        l_options.addWidget(QLabel("Double Up:"), 0, 2, ALIGN_RIGHT)
-        self.w_double_up = QCheckBox()
-        l_options.addWidget(self.w_double_up, 0, 3, ALIGN_LEFT)
-        l_options.addWidget(QLabel("Double Up Scale:"), 1, 2, ALIGN_RIGHT)
-        self.w_double_up_scale = QDoubleSpinBox()
-        self.w_double_up_scale.setMaximum(100)
-        self.w_double_up_scale.setValue(100)
-        l_options.addWidget(self.w_double_up_scale, 1, 3, ALIGN_LEFT)
-
-        l_output_document = QHBoxLayout()
-        w_output_browse_button = QPushButton("Browse")
-        w_output_browse_button.pressed.connect(self.select_output_path)
-        self.w_output_document_label = QLabel("Select output document...")
-        self.output_document_path = ""
-        l_output_document.addWidget(w_output_browse_button)
-        l_output_document.addWidget(self.w_output_document_label)
-        l_output_document.addStretch(1)
-        l_output_document.addWidget(QLabel("Save Signatures Separately:"))
-        self.w_save_signatures_separately = QCheckBox()
-        l_output_document.addWidget(self.w_save_signatures_separately)
-
-        self.w_start_process = QPushButton("Start Process")
-        self.w_start_process.pressed.connect(self.process_document)
-        self.w_start_process.setDisabled(True)
-
-        l_all_settings = QVBoxLayout()
-        l_all_settings.addLayout(l_input_document)
-        l_all_settings.addLayout(l_num_signatures)
-        l_all_settings.addWidget(w_spins)
-        l_all_settings.addLayout(l_sig_error_note)
-        l_all_settings.addLayout(l_options)
-        l_all_settings.addLayout(l_output_document)
-        l_all_settings.addWidget(self.w_start_process, alignment=ALIGN_CENTER)
-
-        self.w_progress_bar = QProgressBar()
-        self.w_progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.w_progress_bar.hide()
-        self.w_progress_label = QLabel()
-        self.w_progress_label.hide()
-
-        self.settings_widget = QWidget()
-        self.settings_widget.setLayout(l_all_settings)
-
-        main_layout = QVBoxLayout()
-        main_layout.addWidget(self.settings_widget)
-        main_layout.addWidget(self.w_progress_bar)
-        main_layout.addWidget(self.w_progress_label, alignment=ALIGN_CENTER)
-
-        main_widget = QWidget()
-        main_widget.setLayout(main_layout)
-        self.setCentralWidget(main_widget)
-
-        self.load_settings()
-
+    """
     def load_settings(self):
         try:
             with SETTINGS_PATH.open("r") as fh:
@@ -408,8 +302,9 @@ class MainWindow(QMainWindow):
         self.w_progress_bar.hide()
         self.w_progress_label.setText("Done!")
         self.settings_widget.setDisabled(False)
+    """
 
-
+QProgressBar = Any
 def create_signature(
         reader: PdfReader,
         pages: tuple[int, int],
@@ -562,12 +457,10 @@ def calc_signature_page_ranges(signature_sizes: list[int]) -> list[tuple[int, in
 
 def main():
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)-8s %(message)s')
-    app = QApplication([])
-
-    window = MainWindow()
-    window.show()
-
-    app.exec()
+    app = wx.App()
+    frm = MainWindow(None, title="Louis' Book Formatter - 2.0.0")
+    frm.Show()
+    app.MainLoop()
 
 
 
