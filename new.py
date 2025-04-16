@@ -5,7 +5,7 @@ import time
 from json import JSONDecodeError
 from math import ceil
 from pathlib import Path
-from typing import Generator, Any
+from typing import Generator, Any, Optional, Union
 
 from pypdf import PdfReader, PdfWriter, PaperSize, Transformation, PageObject
 from pypdf.annotations import Line, PolyLine, Rectangle
@@ -24,116 +24,268 @@ class MainWindow(wx.Frame):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        root = wx.Panel(self)
+        self.root = wx.Panel(self)
+        root = self.root
 
-        w_browse = wx.Button(root, label="Browse")
-        w_input_text = wx.StaticText(root, label="Select input document...")
-        s_input = wx.StaticBoxSizer(wx.HORIZONTAL, root, "Input")
-        s_input.Add(w_browse)
-        s_input.Add(w_input_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=10)
+        self.input_document_path = None
+        self.output_document_path = None
+        self.pdf_reader = None
+        self.start_page = 0
+        self.end_page = 0
 
-        s_main = wx.BoxSizer(wx.VERTICAL)
-        s_main.Add(s_input, flag=wx.ALIGN_CENTER_HORIZONTAL | wx.ALL, border=5)
-        s_main.AddSpacer(1)
+        self.s_input_sizer = wx.StaticBoxSizer(wx.VERTICAL, root, "Input")
+        w_browse_button = wx.Button(root, label="Browse")
+        w_browse_button.Bind(wx.EVT_BUTTON, self.select_input_path)
+        self.w_input_text = wx.StaticText(root, label="Select input document...")
+        s_input_file_select = wx.BoxSizer(wx.HORIZONTAL)
+        s_input_file_select.Add(w_browse_button, flag=wx.ALIGN_CENTER_VERTICAL)
+        s_input_file_select.Add(self.w_input_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, border=10)
 
-        root.SetSizer(s_main)
+        s_input_pages = wx.BoxSizer(wx.HORIZONTAL)
+        s_input_pages.Add(wx.StaticText(root, label="Pages:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        self.w_pages_input = wx.TextCtrl(root, size=wx.Size(50, -1))
+        s_input_pages.Add(self.w_pages_input, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=10)
+        w_refresh_button = wx.Button(root, label="Update")
+        s_input_pages.Add(w_refresh_button, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=10)
+        w_refresh_button.Bind(wx.EVT_BUTTON, self.refresh_button)
+        w_reset_button = wx.Button(root, label="Reset")
+        s_input_pages.Add(w_reset_button, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=10)
+        w_reset_button.Bind(wx.EVT_BUTTON, self.reset_button)
 
-        s_main.Fit(self)
+        self.s_input_sizer.Add(s_input_file_select)
+        self.s_input_sizer.Add(s_input_pages, flag=wx.TOP, border=10)
 
-        # self.load_settings()
+        s_signatures = wx.StaticBoxSizer(wx.VERTICAL, root, "Signatures")
+        s_num_signatures = wx.BoxSizer(wx.HORIZONTAL)
+        s_num_signatures.Add(wx.StaticText(root, label="Num' Signatures:"), flag=wx.ALIGN_CENTER_VERTICAL)
+        self.w_num_signatures = wx.SpinCtrl(root, value="5", size=wx.Size(40, -1))
+        self.w_num_signatures.Disable()
+        self.w_num_signatures.SetMin(1)
+        self.w_num_signatures.Bind(wx.EVT_SPINCTRL, self.number_of_sig_changes)
+        s_num_signatures.Add(self.w_num_signatures, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=5)
+        s_signatures.Add(s_num_signatures)
 
-    """
+        self.s_sig_spins = wx.StaticBoxSizer(wx.HORIZONTAL, root, "")
+        self.sig_spins: list[wx.SpinCtrl] = []
+        for _ in range(5):
+            n = wx.SpinCtrl(root, value="1", size=wx.Size(40, -1))
+            self.sig_spins.append(n)
+            self.s_sig_spins.Add(n)
+            n.Disable()
+        s_signatures.Add(self.s_sig_spins, flag=wx.TOP, border=5)
+
+        self.w_signatures_label = wx.StaticText(root, label="")
+        s_signatures.Add(self.w_signatures_label, flag=wx.TOP, border=5)
+
+        s_options = wx.StaticBoxSizer(wx.HORIZONTAL, root, "Options")
+        s_options_grid = wx.GridBagSizer(5, 5)
+        s_options_grid.Add(
+            wx.StaticText(root, label="Add Lines:"),
+            (0, 0),
+            flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT
+        )
+        self.w_add_lines = wx.CheckBox(root)
+        s_options_grid.Add(self.w_add_lines, (0, 1), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT)
+        s_options_grid.Add(
+            wx.StaticText(root, label="Double Up:"),
+            (0, 3),
+            flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT
+        )
+        self.w_double_up = wx.CheckBox(root)
+        s_options_grid.Add(self.w_double_up, (0, 4), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT)
+        s_options_grid.Add(
+            wx.StaticText(root, label="Double Up Page Height:"),
+            (1, 3),
+            flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT
+        )
+        self.w_double_up_scale = wx.SpinCtrlDouble(root, value="100", inc=0.1, max=999)
+        s_options_grid.Add(self.w_double_up_scale, (1, 4), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT)
+        s_options_grid.Add(
+            wx.StaticText(root, label="mm"),
+            (1, 5),
+            flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT
+        )
+        s_options.Add(s_options_grid, flag=wx.EXPAND)
+
+        s_output = wx.StaticBoxSizer(wx.VERTICAL, root, "Output")
+        w_output_browse_button = wx.Button(root, label="Browse")
+        w_output_browse_button.Bind(wx.EVT_BUTTON, self.select_output_path)
+        self.w_output_text = wx.StaticText(root, label="Select output destination...")
+        s_output_file_select = wx.BoxSizer(wx.HORIZONTAL)
+        s_output_file_select.Add(w_output_browse_button, flag=wx.ALIGN_CENTER_VERTICAL)
+        s_output_file_select.Add(self.w_output_text, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT | wx.RIGHT, border=10)
+        s_output.Add(s_output_file_select)
+        s_save_sigs_separately = wx.BoxSizer(wx.HORIZONTAL)
+        s_save_sigs_separately.Add(
+            wx.StaticText(root, label="Save Signatures Separately:"),
+            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT | wx.LEFT, border=10
+        )
+        self.w_save_sigs_separately = wx.CheckBox(root)
+        s_save_sigs_separately.Add(self.w_save_sigs_separately, flag=wx.ALIGN_CENTER_VERTICAL | wx.LEFT, border=5)
+        s_output.Add(s_save_sigs_separately, flag=wx.TOP, border=10)
+
+        self.w_start_process = wx.Button(root, label="Start Process")
+        self.w_start_process.Disable()
+        self.w_start_process.Bind(wx.EVT_BUTTON, self.process_document)
+
+        self.w_progress_bar = wx.Gauge(root, range=100)
+        self.w_progress_text = wx.StaticText(root, label="foo", style=wx.ALIGN_CENTER)
+        self.w_progress_bar.Hide()
+        self.w_progress_text.Hide()
+
+        self.s_main = wx.BoxSizer(wx.VERTICAL)
+        self.s_main.Add(self.s_input_sizer, flag=wx.EXPAND | wx.ALL, border=10)
+        self.s_main.Add(s_signatures, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        self.s_main.Add(s_options, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        self.s_main.Add(s_output, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        self.s_main.Add(self.w_start_process, flag=wx.ALIGN_CENTER | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        self.s_main.Add(self.w_progress_bar, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+        self.s_main.Add(self.w_progress_text, flag=wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, border=10)
+
+        root.SetSizer(self.s_main)
+        self.s_main.Fit(self)
+        self.SetMinSize(self.GetSize())
+
+        self.load_settings()
+        self.Bind(wx.EVT_CLOSE, self.save_settings)
+
     def load_settings(self):
         try:
             with SETTINGS_PATH.open("r") as fh:
                 settings_data = json.load(fh)
-            self.w_add_side_lines.setChecked(settings_data['add_side_lines'])
-            self.w_double_up.setChecked(settings_data['double_up'])
-            self.w_double_up_scale.setValue(settings_data['double_up_scale'])
-            self.w_save_signatures_separately.setChecked(settings_data['save_signatures_separately'])
+            self.w_add_lines.SetValue(settings_data['add_side_lines'])
+            self.w_double_up.SetValue(settings_data['double_up'])
+            self.w_double_up_scale.SetValue(settings_data['double_up_scale'])
+            self.w_save_sigs_separately.SetValue(settings_data['save_signatures_separately'])
 
         except FileNotFoundError:
             logging.debug("No settings file")
         except JSONDecodeError as e:
             logging.exception(e)
 
-    def save_settings(self):
+    def save_settings(self, event: wx.Event):
         try:
             settings_data = {
-                'add_side_lines': self.w_add_side_lines.isChecked(),
-                'double_up': self.w_double_up.isChecked(),
-                'double_up_scale': self.w_double_up_scale.value(),
-                'save_signatures_separately': self.w_save_signatures_separately.isChecked()
+                'add_side_lines': self.w_add_lines.GetValue(),
+                'double_up': self.w_double_up.GetValue(),
+                'double_up_scale': self.w_double_up_scale.GetValue(),
+                'save_signatures_separately': self.w_save_sigs_separately.GetValue()
             }
             with open(SETTINGS_PATH, "w") as fh:
                 # noinspection PyTypeChecker
                 json.dump(settings_data, fh)
         except Exception as e:
             logging.exception(e)
+        event.Skip()
+
+    def refresh_button(self, _=None):
+        if self.pdf_reader is not None:
+            new_start, new_end = get_page_range_numbers(self.w_pages_input.GetValue(), self.pdf_reader.get_num_pages())
+            new_num = new_end - new_start + 1
+            if new_num % 4 != 0:
+                dlg = wx.MessageDialog(
+                    self,
+                    f"Input page range must have a number of pages divisible by 4, has {new_num}.",
+                    "Bad Page Range",
+                    wx.OK | wx.ICON_WARNING | wx.CENTER
+                )
+                dlg.ShowModal()
+            else:
+                self.start_page = new_start
+                self.end_page = new_end
+                self.input_pages_changed()
+
+    def reset_button(self, _=None):
+        if self.pdf_reader is not None:
+            self.start_page = 1
+            self.end_page = self.pdf_reader.get_num_pages()
+            self.w_pages_input.ChangeValue(f"1-{self.end_page}")
+            self.refresh_button()
 
     def get_num_pages(self):
-        return (self.w_end_page.value() - self.w_start_page.value()) + 1
+        return (self.end_page - self.start_page) + 1
 
-    def select_input_path(self):
+    def select_input_path(self, _):
         if self.input_document_path:
             start_dir = str(Path(self.input_document_path).parent)
         else:
             start_dir = "${HOME}"
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select File",
-            start_dir,
-            "PDF Files (*.pdf)",
-        )
-        if file_path:
-            self.w_input_document_label.setText(file_path)
-            self.input_document_path = file_path
-            self.read_input_file()
-            if self.input_document_path and self.output_document_path:
-                self.w_start_process.setDisabled(False)
-            else:
-                self.w_start_process.setDisabled(True)
-        else:
-            pass
 
-    def select_output_path(self):
+        with wx.FileDialog(
+                self,
+                message="Open PDF file",
+                defaultDir=start_dir,
+                wildcard="PDF files (*.pdf)|*.pdf",
+                style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+        ) as fileDialog:
+
+            if fileDialog.ShowModal() == wx.ID_CANCEL:
+                return  # the user changed their mind
+
+            file_path = fileDialog.GetPath()
+
+        self.w_input_text.SetLabelText(file_path)
+        self.input_document_path = file_path
+        self.read_input_file()
+        if self.input_document_path and self.output_document_path:
+            self.w_start_process.Enable()
+        else:
+            self.w_start_process.Disable()
+
+    def select_output_path(self, _):
         if self.output_document_path:
             start_dir = str(Path(self.output_document_path).parent)
         elif self.input_document_path:
             start_dir = str(Path(self.input_document_path).parent)
         else:
             start_dir = "${HOME}"
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Select File",
-            start_dir + "/output.pdf",
-            "PDF Files (*.pdf)",
-        )
-        if file_path:
-            self.w_output_document_label.setText(file_path)
-            self.output_document_path = file_path
-            if self.input_document_path and self.output_document_path:
-                self.w_start_process.setDisabled(False)
-            else:
-                self.w_start_process.setDisabled(True)
+
+        with wx.FileDialog(
+                self,
+                message="Save PDF file",
+                defaultDir=start_dir,
+                defaultFile="output.pdf",
+                wildcard="PDF files (*.pdf)|*.pdf",
+                style=wx.FD_SAVE
+        ) as fileDialog:
+
+            if fileDialog.ShowModal() == wx.ID_CANCEL:
+                return  # the user changed their mind
+
+            file_path = fileDialog.GetPath()
+
+        self.w_output_text.SetLabelText(file_path)
+        self.output_document_path = file_path
+        if self.input_document_path and self.output_document_path:
+            self.w_start_process.Enable()
         else:
-            pass
+            self.w_start_process.Disable()
+        self.s_main.Fit(self)
+        self.Update()
 
-    def number_of_signatures_changed(self, n: int):
-        for w in self.sig_size_spins:
-            self.l_signature_sizes.removeWidget(w)
+    def number_of_sig_changes(self, e):
+        if self.pdf_reader is not None:
+            self.update_sig_spins(e.Int)
 
-        self.sig_size_spins = [QSpinBox() for _ in range(n)]
-        for w in self.sig_size_spins:
-            w.setMinimum(1)
-            if self.pdf_reader is None:
-                w.setValue(1)
-            else:
-                sig_sizes = calc_signature_sizes(self.get_num_pages(), n)
-                for size, size_control in zip(sig_sizes, self.sig_size_spins):
-                    size_control.setValue(size)
-            self.l_signature_sizes.addWidget(w)
-            w.valueChanged.connect(self.check_sheet_counts)
+    def update_sig_spins(self, n: int):
+        self.s_sig_spins.Clear(True)
+
+        sizes = calc_signature_sizes(self.get_num_pages(), n)
+        self.sig_spins = [wx.SpinCtrl(self.root, value=str(s), size=wx.Size(40, -1)) for s in sizes]
+
+        for w in self.sig_spins:
+            self.s_sig_spins.Add(w)
+            # TODO: Add bind
+
+        self.s_main.Fit(self)
+        self.s_main.Layout()
+
+    def input_pages_changed(self):
+        num_sigs = get_ideal_num_sigs(self.get_num_pages())
+        self.w_num_signatures.SetValue(num_sigs)
+        self.w_signatures_label.SetLabelText(f"({self.get_num_pages() // 4} sheets)")
+        self.update_sig_spins(n=num_sigs)
+        self.w_num_signatures.Enable()
 
     def read_input_file(self):
         if self.input_document_path:
@@ -141,50 +293,26 @@ class MainWindow(wx.Frame):
             num_pages = self.pdf_reader.get_num_pages()
 
             if num_pages % 4 == 0:
-                self.w_start_page.setMaximum(num_pages - 3)
-                self.w_end_page.setMaximum(num_pages)
-                self.w_end_page.setValue(num_pages)
-                self.update_signature_suggestions()
+                self.w_pages_input.ChangeValue(f"{1}-{num_pages}")
+                self.start_page = 1
+                self.end_page = self.pdf_reader.get_num_pages()
+                self.input_pages_changed()
             else:
-                QMessageBox.critical(
+                dlg = wx.MessageDialog(
                     self,
-                    "Bad File",
                     f"Input PDF must have a number of pages divisible by 4, has {num_pages}.",
-                    buttons=QMessageBox.StandardButton.Ok
+                    "Bad File",
+                    wx.OK | wx.ICON_WARNING | wx.CENTER
                 )
+                dlg.ShowModal()
+
                 self.pdf_reader = None
                 self.input_document_path = ""
-                self.w_input_document_label.setText("Select input document...")
+                self.w_input_text.SetLabelText("Select input document...")
         else:
             logging.error(f"Cannot read input file, input path is {repr(self.input_document_path)}")
 
-    def update_signature_suggestions(self):
-        logging.debug("Fired update signatures")
-        if self.pdf_reader is None:
-            logging.error("Cannot update suggested signatures, reader is None")
-        else:
-            self.w_start_page.setMaximum(self.w_end_page.value() - 3)
-            self.w_end_page.setMinimum(self.w_start_page.value() + 3)
-            num_pages = self.get_num_pages()
-            self.w_num_pages_label.setText(
-                f"({num_pages} pages, {num_pages // 4} sheets)"
-            )
-            max_size = num_pages // 4
-            n = 0
-            has_looped = False
-            force_update = False
-            if len(self.sig_size_spins) == 1:
-                force_update = True
-            while max_size > IDEAL_MAX_SIG_SIZE or not has_looped:
-                n += 1
-                self.w_num_sigs.setValue(n)
-                if force_update:
-                    self.number_of_signatures_changed(n)
-                    force_update = False
-                max_size = max([s.value() for s in self.sig_size_spins])
-                has_looped = True
-            self.w_sigs_error_label.setText("")
-
+    """
     def check_sheet_counts(self, _):
         if self.pdf_reader is None:
             self.w_sigs_error_label.setText("")
@@ -194,21 +322,29 @@ class MainWindow(wx.Frame):
                 self.w_sigs_error_label.setText(f"Incorrect number of sheets: {num_sheets}")
             else:
                 self.w_sigs_error_label.setText("")
+    """
 
-    def closeEvent(self, a0):
-        self.save_settings()
-        super().closeEvent(a0)
-
-    def process_document(self):
+    def process_document(self, _):
         if self.pdf_reader is None:
             raise ValueError("Should not have access process function without a pdfreader loaded.")
 
-        self.settings_widget.setDisabled(True)
-        self.w_progress_bar.show()
-        self.w_progress_label.show()
-        self.w_start_process.setDisabled(True)
+        if sum([s.GetValue() for s in self.sig_spins]) != self.get_num_pages() // 4:
+            dlg = wx.MessageDialog(
+                self,
+                f"Signature sizes do not sum to the expected value; "
+                f"{sum([s.GetValue() for s in self.sig_spins])}, expected {self.get_num_pages() // 4}.",
+                "Invalid Signature Values",
+                wx.OK | wx.ICON_WARNING | wx.CENTER
+            )
+            dlg.ShowModal()
+            return
 
-        if self.w_add_side_lines.isChecked():
+        self.w_progress_bar.Show()
+        self.w_progress_text.Show()
+        self.w_start_process.Disable()
+        self.s_main.Fit(self)
+
+        if self.w_add_lines.GetValue():
             logging.debug("Adding lines")
             line_writer = PdfWriter(self.pdf_reader)
             page_width = self.pdf_reader.pages[0].mediabox.width
@@ -216,7 +352,7 @@ class MainWindow(wx.Frame):
 
             top_line = Rectangle(
                 rect=(
-                    0, page_height - 0.25,
+                    0, page_height - 1,
                     page_width, page_height
                 ),
                 interior_color="#000000"
@@ -227,7 +363,7 @@ class MainWindow(wx.Frame):
 
             side_line = Rectangle(
                 rect=(
-                    page_width - 0.25, 0,
+                    page_width - 1, 0,
                     page_width, page_height
                 ),
                 interior_color="#000000"
@@ -236,24 +372,21 @@ class MainWindow(wx.Frame):
                 [FloatObject(0.0), FloatObject(0.0), FloatObject(0.0)]
             )
 
-            page_index = line_writer.get_num_pages() - 1
+            page_index = self.end_page - 1
             line_writer.add_annotation(page_index, top_line)
             line_writer.add_annotation(page_index, side_line)
             output_bytes = io.BytesIO()
             line_writer.write(output_bytes)
             output_bytes.seek(0)
-            with open("lined.pdf", "wb") as fh:
-                fh.write(output_bytes.read())
-            output_bytes.seek(0)
             self.pdf_reader = PdfReader(output_bytes)
 
-        self.w_progress_label.setText("Creating signatures...")
+        self.w_progress_text.SetLabelText("Creating signatures...")
         total_sides = self.get_num_pages() // 2
-        self.w_progress_bar.setMaximum(total_sides)
+        self.w_progress_bar.SetRange(total_sides)
 
-        sig_sizes = [s.value() for s in self.sig_size_spins]
+        sig_sizes = [s.GetValue() for s in self.sig_spins]
         signatures: list[PdfWriter] = []
-        for page_range in get_signature_page_indexes(sig_sizes, self.w_start_page.value() - 1):
+        for page_range in get_signature_page_indexes(sig_sizes, self.start_page - 1):
             signatures.append(
                 create_signature(
                     self.pdf_reader,
@@ -262,20 +395,26 @@ class MainWindow(wx.Frame):
                 )
             )
 
-        if self.w_double_up.isChecked():
+        if self.w_double_up.GetValue():
             logging.info("Doubling up pages")
             doubled_up_sigs = []
-            self.w_progress_bar.reset()
-            self.w_progress_label.setText("Creating doubled-up pages...")
+            self.w_progress_bar.SetValue(0)
+            self.w_progress_text.SetLabelText("Creating doubled-up pages...")
             for sig in signatures:
-                doubled_up_sigs.append(create_double_up(sig, progress_bar=self.w_progress_bar))
+                doubled_up_sigs.append(
+                    create_double_up(
+                        sig,
+                        target_height_mm=self.w_double_up_scale.GetValue(),
+                        progress_bar=self.w_progress_bar
+                    )
+                )
             signatures = doubled_up_sigs
 
-        self.w_progress_bar.reset()
-        self.w_progress_bar.setMaximum(len(signatures))
+        self.w_progress_bar.SetValue(0)
+        self.w_progress_bar.SetRange(len(signatures))
 
-        if self.w_save_signatures_separately.isChecked():
-            self.w_progress_label.setText("Saving signatures...")
+        if self.w_save_sigs_separately.GetValue():
+            self.w_progress_text.SetLabelText("Saving signatures...")
             for i, s in enumerate(signatures):
                 file_name, ext = self.output_document_path.rsplit(".", 1)
                 with open(file_name + f"_{i}." + ext, "bw") as fh:
@@ -284,32 +423,43 @@ class MainWindow(wx.Frame):
                         writer.insert_page(page, writer.get_num_pages())
                     writer.write(fh)
                     writer.close()
-                    self.w_progress_bar.setValue(self.w_progress_bar.value() + 1)
-                    QCoreApplication.processEvents()
+                    self.w_progress_bar.SetValue(self.w_progress_bar.GetValue() + 1)
         else:
             merger = PdfWriter()
-            self.w_progress_label.setText("Merging Signatures...")
+            self.w_progress_text.SetLabelText("Merging Signatures...")
             for s in signatures:
                 for page in s.pages:
                     merger.insert_page(page, merger.get_num_pages())
-                    self.w_progress_bar.setValue(self.w_progress_bar.value() + 1)
-                    QCoreApplication.processEvents()
+                    self.w_progress_bar.SetValue(self.w_progress_bar.GetValue() + 1)
 
-            self.w_progress_label.setText("Saving output PDF...")
+            self.w_progress_text.SetLabelText("Saving output PDF...")
             with open(self.output_document_path, "bw") as fh:
                 merger.write(fh)
                 merger.close()
 
-        self.w_progress_bar.hide()
-        self.w_progress_label.setText("Done!")
-        self.settings_widget.setDisabled(False)
-    """
+        self.w_progress_bar.Hide()
+        self.w_progress_text.SetLabelText("Done!")
+        self.s_main.Fit(self)
 
-QProgressBar = Any
+
+def get_page_range_numbers(range_str: str, max_page: int) -> tuple[int, int]:
+    p1, p2 = range_str.split("-")
+    try:
+        start = int(p1)
+    except ValueError:
+        start = 1
+    try:
+        end = int(p2)
+    except ValueError:
+        end = max_page
+
+    return start, end
+
+
 def create_signature(
         reader: PdfReader,
         pages: tuple[int, int],
-        progress_bar: None | QProgressBar = None
+        progress_bar: Optional[wx.Gauge] = None
 ) -> PdfWriter:
     page_width = reader.pages[0].mediabox.width
     page_height = reader.pages[0].mediabox.height
@@ -339,8 +489,8 @@ def create_signature(
             raise e
 
         if progress_bar is not None:
-            progress_bar.setValue(progress_bar.value() + 1)
-            QCoreApplication.processEvents()
+            progress_bar.SetValue(progress_bar.GetValue() + 1)
+            wx.Yield()
 
     return new_pdf
 
@@ -348,11 +498,13 @@ def create_signature(
 def create_double_up(
         document: PdfReader | PdfWriter,
         output_size: Dimensions = PaperSize.A4,
-        scale: float = 1.0,
-        progress_bar: None | QProgressBar = None
+        target_height_mm: Optional[float] = None,
+        progress_bar: Union[None, wx.Gauge] = None
 ) -> PdfWriter:
     writer = PdfWriter()
 
+    target_height_points = target_height_mm * 2.8346472
+    scale = target_height_points / document.pages[0].mediabox.height
     scaled_size = document.pages[0].mediabox.width * scale, document.pages[0].mediabox.height * scale
 
     bottom_y = (output_size.height // 2 - scaled_size[1]) // 2
@@ -369,8 +521,8 @@ def create_double_up(
         new_page.merge_transformed_page(original_page, bottom_transform)
 
         if progress_bar is not None:
-            progress_bar.setValue(progress_bar.value() + 1)
-            QCoreApplication.processEvents()
+            progress_bar.SetValue(progress_bar.GetValue() + 1)
+            wx.Yield()
 
     return writer
 
@@ -394,6 +546,15 @@ def get_signature_page_indexes(signature_sizes: list[int], start_index=0) -> lis
         signature_ranges.append((current_page, current_page + (sig * 4) - 1))
         current_page += (sig * 4)
     return signature_ranges
+
+
+def get_ideal_num_sigs(num_pages: int) -> int:
+    n = 1
+    sizes = [num_pages]
+    while max(sizes) > IDEAL_MAX_SIG_SIZE:
+        n += 1
+        sizes = calc_signature_sizes(num_pages, n)
+    return n
 
 
 def calc_signature_sizes(num_pages: int, num_signatures: int) -> list[int]:
