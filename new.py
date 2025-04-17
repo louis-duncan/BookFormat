@@ -7,6 +7,7 @@ from math import ceil
 from pathlib import Path
 from typing import Generator, Any, Optional, Union
 
+import pymupdf
 from pypdf import PdfReader, PdfWriter, PaperSize, Transformation, PageObject
 from pypdf.annotations import Line, PolyLine, Rectangle
 from pypdf.generic import RectangleObject, FloatObject, ArrayObject, NameObject
@@ -98,11 +99,23 @@ class MainWindow(wx.Frame):
             (1, 3),
             flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT
         )
-        self.w_double_up_scale = wx.SpinCtrlDouble(root, value="100", inc=0.1, max=999)
-        s_options_grid.Add(self.w_double_up_scale, (1, 4), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT)
+        self.w_double_up_page_height = wx.SpinCtrlDouble(root, value="100", inc=0.1, max=999)
+        s_options_grid.Add(self.w_double_up_page_height, (1, 4), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT)
         s_options_grid.Add(
             wx.StaticText(root, label="mm"),
             (1, 5),
+            flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT
+        )
+        s_options_grid.Add(
+            wx.StaticText(root, label="Double Up Center Margin:"),
+            (2, 3),
+            flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_RIGHT
+        )
+        self.w_double_up_centre_margin = wx.SpinCtrlDouble(root, value="-1", min=-1, inc=0.5, max=99)
+        s_options_grid.Add(self.w_double_up_centre_margin, (2, 4), flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT)
+        s_options_grid.Add(
+            wx.StaticText(root, label="mm (-1 will auto margin)"),
+            (2, 5),
             flag=wx.ALIGN_CENTER_VERTICAL | wx.ALIGN_LEFT
         )
         s_options.Add(s_options_grid, flag=wx.EXPAND)
@@ -155,7 +168,8 @@ class MainWindow(wx.Frame):
                 settings_data = json.load(fh)
             self.w_add_lines.SetValue(settings_data['add_side_lines'])
             self.w_double_up.SetValue(settings_data['double_up'])
-            self.w_double_up_scale.SetValue(settings_data['double_up_scale'])
+            self.w_double_up_page_height.SetValue(settings_data['double_up_height'])
+            self.w_double_up_centre_margin.SetValue(settings_data['double_up_margin'])
             self.w_save_sigs_separately.SetValue(settings_data['save_signatures_separately'])
 
         except FileNotFoundError:
@@ -168,7 +182,8 @@ class MainWindow(wx.Frame):
             settings_data = {
                 'add_side_lines': self.w_add_lines.GetValue(),
                 'double_up': self.w_double_up.GetValue(),
-                'double_up_scale': self.w_double_up_scale.GetValue(),
+                'double_up_height': self.w_double_up_page_height.GetValue(),
+                'double_up_margin': self.w_double_up_centre_margin.GetValue(),
                 'save_signatures_separately': self.w_save_sigs_separately.GetValue()
             }
             with open(SETTINGS_PATH, "w") as fh:
@@ -345,40 +360,7 @@ class MainWindow(wx.Frame):
         self.s_main.Fit(self)
 
         if self.w_add_lines.GetValue():
-            logging.debug("Adding lines")
-            line_writer = PdfWriter(self.pdf_reader)
-            page_width = self.pdf_reader.pages[0].mediabox.width
-            page_height = self.pdf_reader.pages[0].mediabox.height
-
-            top_line = Rectangle(
-                rect=(
-                    0, page_height - 1,
-                    page_width, page_height
-                ),
-                interior_color="#000000"
-            )
-            top_line[NameObject("/C")] = ArrayObject(
-                [FloatObject(0.0)]
-            )
-
-            side_line = Rectangle(
-                rect=(
-                    page_width - 1, 0,
-                    page_width, page_height
-                ),
-                interior_color="#000000"
-            )
-            side_line[NameObject("/C")] = ArrayObject(
-                [FloatObject(0.0), FloatObject(0.0), FloatObject(0.0)]
-            )
-
-            page_index = self.end_page - 1
-            line_writer.add_annotation(page_index, top_line)
-            line_writer.add_annotation(page_index, side_line)
-            output_bytes = io.BytesIO()
-            line_writer.write(output_bytes)
-            output_bytes.seek(0)
-            self.pdf_reader = PdfReader(output_bytes)
+            self.pdf_reader = add_lines(self.pdf_reader, self.end_page - 1)
 
         self.w_progress_text.SetLabelText("Creating signatures...")
         total_sides = self.get_num_pages() // 2
@@ -400,12 +382,15 @@ class MainWindow(wx.Frame):
             doubled_up_sigs = []
             self.w_progress_bar.SetValue(0)
             self.w_progress_text.SetLabelText("Creating doubled-up pages...")
+            center_margin = None if self.w_double_up_centre_margin.GetValue() < 0 \
+                else self.w_double_up_centre_margin.GetValue()
             for sig in signatures:
                 doubled_up_sigs.append(
                     create_double_up(
                         sig,
-                        target_height_mm=self.w_double_up_scale.GetValue(),
-                        progress_bar=self.w_progress_bar
+                        target_height_mm=self.w_double_up_page_height.GetValue(),
+                        progress_bar=self.w_progress_bar,
+                        center_margin_mm=center_margin
                     )
                 )
             signatures = doubled_up_sigs
@@ -440,6 +425,35 @@ class MainWindow(wx.Frame):
         self.w_progress_bar.Hide()
         self.w_progress_text.SetLabelText("Done!")
         self.s_main.Fit(self)
+
+
+def add_lines(reader: PdfReader, line_page_index: int) -> PdfReader:
+    logging.debug("Adding lines")
+
+    tmp_writer = PdfWriter(reader)
+    pdf_stream = io.BytesIO()
+    tmp_writer.write(stream=pdf_stream)
+    pdf_stream.seek(0)
+    mu_pdf = pymupdf.Document(stream=pdf_stream)
+    last_page = mu_pdf.load_page(line_page_index)
+    width = last_page.mediabox.width
+    height = last_page.mediabox.height
+    # pymupdf uses top left as origin
+    top_p1 = (0, 0)
+    top_p2 = (width, 0)
+    side_p1 = top_p2
+    side_p2 = (width, height)
+    last_page.draw_line(
+        p1=top_p1,
+        p2=top_p2
+    )
+    last_page.draw_line(
+        p1=side_p1,
+        p2=side_p2
+    )
+    mu_stream = io.BytesIO(mu_pdf.tobytes())
+    mu_stream.seek(0)
+    return PdfReader(mu_stream)
 
 
 def get_page_range_numbers(range_str: str, max_page: int) -> tuple[int, int]:
@@ -499,16 +513,24 @@ def create_double_up(
         document: PdfReader | PdfWriter,
         output_size: Dimensions = PaperSize.A4,
         target_height_mm: Optional[float] = None,
-        progress_bar: Union[None, wx.Gauge] = None
+        progress_bar: Union[None, wx.Gauge] = None,
+        center_margin_mm: Optional[int] = None
 ) -> PdfWriter:
     writer = PdfWriter()
 
-    target_height_points = target_height_mm * 2.8346472
+    target_height_points = mm_to_pnt(target_height_mm)
     scale = target_height_points / document.pages[0].mediabox.height
     scaled_size = document.pages[0].mediabox.width * scale, document.pages[0].mediabox.height * scale
 
-    bottom_y = (output_size.height // 2 - scaled_size[1]) // 2
-    top_y = bottom_y + (output_size.height // 2)
+    if center_margin_mm is None:
+        logging.debug("Placing double up pages equally spaced")
+        bottom_y = (output_size.height // 2 - scaled_size[1]) // 2
+        top_y = bottom_y + (output_size.height // 2)
+    else:
+        logging.debug(f"Placing double up pages with {center_margin_mm}mm center margin")
+        bottom_y = ((output_size.height // 2) - scaled_size[1]) - mm_to_pnt(center_margin_mm)
+        top_y = (output_size.height // 2) + mm_to_pnt(center_margin_mm)
+
     x = (output_size.width - scaled_size[0]) // 2
 
     top_transform = Transformation().scale(scale, scale).translate(x, top_y)
@@ -525,6 +547,10 @@ def create_double_up(
             wx.Yield()
 
     return writer
+
+
+def mm_to_pnt(mm: float) -> float:
+    return mm * 2.8346472
 
 
 def gen_signature_page_orderings(pages: tuple[int, int]) -> Generator[tuple[int, int], None, None]:

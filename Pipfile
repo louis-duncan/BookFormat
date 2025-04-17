@@ -6,5 +6,6 @@ name = "pypi"
 [packages]
 pypdf = "==5.0.0"
 wxpython = "*"
+pymupdf = "*"
 
 [dev-packages]
